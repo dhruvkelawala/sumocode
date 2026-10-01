@@ -1,6 +1,153 @@
-# D80 — isolated canonical C1/C2 source candidate
+# D83 — source-only canonical corrections
 
-**Bounded source candidate committed; verification INCOMPLETE.** Only the delegated C1/C2 source contract was implemented. Synthetic interface checks pass; eager main, C3, actual runtime, signed live admission, and complete process coverage remain NOT RUN / blocked. This is a coordinator handoff, not adoption, publication, release approval, or a source-privacy certificate.
+**Corrections committed; overall verification INCOMPLETE.** Independent59 Spec / 60 Standards requested changes on the old source; D83 authorizes only the corrections below. No adoption, publication, independent review, runtime successor, parent application, or full verification occurred. Coordinator must independently re-review both axes before any reuse.
+
+## Revision authority and exact manifest
+
+Worktree `/Users/sumodeus/code/sumocode.sumo-worktrees/sumo__v08-canonical-source-revision`, preserved new branch `sumo/v08-canonical-source-revision`. Initial branch/clean tracked state/HEAD/tree were verified exactly:
+
+```text
+base/evidence869 869c044c561a6cc272b12ca7ed7956e845ef46d6
+base tree c8dd2cbc6fb62b88d49ea9c0468700d1cd57661b
+ancestor source a5abe2cb131e7a94788bab4fb3c986e8bce35888
+ancestor source tree 9a4db1780a22da41d76a67673d03254ff7938156
+ancestor applied475 475560cf45becbafe81b41a718b4724c1cc871cb
+ancestor applied475 tree 4ebf4544bc1bd1f020545a8785329426c9fce226
+D83 source HEAD 88c38b535c75e43f771af508d600248f80556436
+D83 source tree 6930b3d74d856a2c97d52fe28afbb73f7dfaafe9
+```
+
+One new bounded correction commit, followed by a separate report-only evidence commit. The latter's exact SHA/tree are recorded after committing in this worktree's `.local/canonical-source/logs/d83-evidence-head.log` and the handoff; a document cannot embed its own resulting commit/tree identity without changing it. No old commit was amended. Original58 worktree/branch/logs remain untouched.
+
+Authorized full parent reads were the ABSOLUTE `/Users/sumodeus/code/sumocode/plans/120-spike/` files `canonical-source-revision-contract.md`, `canonical-c1-c2-source-contract.md`, `canonical-source-standards-review.md`, and `canonical-source-review-checkpoint.md`. D83 override: 9,231 bytes, SHA256 `7a045c3a2b001c21db19b27ef955152b4358a06a239e27e632359af6bdcd9281`. Immutable D80: 9,277 bytes, SHA256 `eb7d613030f245ab17f613d8c101799b37f9e5a0467b13f28d006c0c897cd9b6`. Full local AGENTS/DEV_LOOP/old report and build/tdd/commit/review-ready skills, tdd tests/mocking guidance, and the resolved quality contract were read.
+
+Only allowed existing paths changed: source commit has `scripts/preflight-integration.mjs` (28 additions / 15 deletions), `scripts/run-integration-harness.mjs` (2 / 2), and `test/integration/verification-harness.test.ts` (91 / 0); evidence commit changes only this existing report. There is **zero old test-body churn versus869**, no new export/module/dependency/framework/ledger/registry/parser engine/supervisor/runner/test hook/module mock. New cases reside only in the two existing positive describes. The sole harmless old census caller is unchanged and selected for the final check.
+
+Source blobs:
+
+```text
+scripts/preflight-integration.mjs cf42f31e208810ab22152def07d7d79e464d76ab
+scripts/run-integration-harness.mjs 1eed779f8d7045f932540e53b9a4f0aff9bc9f76
+test/integration/verification-harness.test.ts 989b08d066c899fa1a157935e8ffd33684752ac3
+```
+
+Whole preflight `function currentProcessGroupId`→`export async function fixIntegrationPreflight` is byte-identical to869: **10,106 bytes / SHA256 `cf3f2ddebeec024201a8a4d4a4dc0237a558d93e6ddeb0e8804ca568df8e5c86`**. Auth/constants/supervisor/admission/bootstrap/package/lock equal869 with the same blobs recorded in the historical manifest below. Accepted pick bytes remain: DEV_LOOP `55eef0ca75332aafcd5e0854bcad2653db22ea39` equals893; runner test ADD `905560a779ced169867f034efc80438d3fe62cf1` and Vitest config `16f227b777142924640050c793ba55689984a155` equal8d. Selector unchanged, 1,684 bytes / SHA256 `f30f54d0348dd3c14091b32ec12e8682347f966c7f7fa50514078e2fa8098ded`. Version0.7.5/Pi0.99.1 pins unchanged; source equality checks are retained in `d83-identities-before-commit.log`.
+
+## Corrections and bounded tradeoffs
+
+1. **P1 partial manual census:** the existing dead-census owner scans all available content, retains every independently schema-valid expected-run spawn tuple, coalesces only exact tuples, and preserves conflicting valid exclusions plus named uncertainty. Readable bytes are still parsed after later metadata loss/instability; unavailable bytes are not invented. Unknown classification now carries registrations through existing harnessState to public inspection. HMAC is FORMAT ONLY postmortem, never cryptographically verified or used as signal authority.
+2. **P1 manual effect exclusion:** fix excludes known manual PIDs and their recorded/current groups from group TERM selection. A signature-bearing sibling can only use the existing individual-PID path, never group-signal the manual survivor. Escalation additionally excludes groups containing a known manual PID in the latest rows. Independent nonmanual groups remain eligible under existing checks; unknown namespaces remain preserved and returned as refused. Both fresh owner+census checks immediately before rm are untouched. This is observed known-metadata protection, not quiescence or a lifetime race proof.
+3. **P2 torn whitespace:** any nonempty unterminated final fragment is named torn before whitespace skipping. No trim/newline/prefix forgiveness, extra read/retry, or raw parse excerpts. Signed candidates remain available even when a tail fails. Empty file and complete blank lines yield zero REGISTERED groups only. Full A/B, file-identity comparison, any-observed-change failure and per-group continuation are unchanged; after-B quiescence remains C3 STOP.
+4. **Shared P2/Standards60 grace:** ONLY `const RUNNER_TERM_GRACE_MS = 1_000;` restored and compared byte-for-byte with applied475's declaration. Original58's750 was an actual unauthorized source change caused by the coordinator's incorrect scope premise, **not worker disobedience**. Browser750 is different and untouched; supervisor750/preflight300/other timers unchanged. Actual default waiting NOT RUN; no fake-clock equivalence or timeout-budget grant.
+
+Tradeoffs: keep policies local to their existing owners, reuse the existing option bags and teardown, and add only local identity collections. The first named uncertainty is retained while all readable candidates are scanned; no unread-data coverage guarantee. No attempt to expand authority, repair C3, refactor shared parsing, or establish universal process/privacy/fidelity proof. Synthetic late-read instability is source-traced, not deterministically fault-injected: no hook/mock was introduced to claim that extra coverage.
+
+## New execution containment and exact checks
+
+Before any test import, re-traced the whole selected file and the actual import path: runner/preflight guards, bundle helpers/auth/constants, harness-supervisor/admission, spawn-pi-pty, terminal-controller/diagnostics/errors, Vitest config, installed node-pty entry/native-loader path, and lint config/plugin imports and repository-marker filesystem lookup. No selected body calls spawn/admission/Pi/PTY/ps; imported supervisor afterAll returns with fallbackRoot undefined. afterEach has no registered children and only removes owned synthetic roots. The existing package-local node-pty prebuilt library is loaded by the old import graph; no native build or native contract was run. This is a scoped static trace, not an encompassing SDK/app graph closure or OS sandbox certificate.
+
+Owned agent/state/config/diag/tmp/cache and empty npm configuration were staged under this worktree's `.local/canonical-source/` before imports/checks. HOME/Git settings/config/GIT_CONFIG_COUNT were unchanged; no private agent auth/persona/accounts/Remnic/Herdr/MCP/server credentials were read. Credential names were scrubbed without reading/logging their values. All new fix calls inject **table + rows + readRows + currentPgid + kill + wait**; all new audit calls inject **readProcessTable + readProcessStart + currentPgid + kill + wait**. The only permitted real process operation in selected bodies is the existing metadata `kill(2147483647, 0)` probe, not a live-identity test. Synthetic callbacks record zero-attempt arrays rather than throwing into swallowed sendSignal errors.
+
+Cached metadata, digests and version output still match Node24.15.0 and consumerpnpm10.29.2 at the exact historical tool paths/digests below. One offline frozen ignore-scripts installation: 337 reused, **0 downloaded**, no scripts. No download/version hunting/systempnpm12/Bun/age bypass. All new check commands used exactly the `scrub` / `safe` shell prefix printed in historical section4 below, from the **new revision worktree**; `env -u` flags precede assignments and `LEFTHOOK=0` is correctly spelled. No HOME or Git override was supplied.
+
+Exact invocations and retained results:
+
+```bash
+# install.log / tool-version.log, exits0
+"${safe[@]}" --version
+"${safe[@]}" exec node --version
+"${safe[@]}" install --offline --frozen-lockfile --ignore-scripts --store-dir /Users/sumodeus/Library/pnpm/store
+
+# P1 red before source correction, d83-p1-red.log, exit1
+"${safe[@]}" exec vitest run test/integration/verification-harness.test.ts --fileParallelism=false -t 'canonical preflight read loss'
+# Tests 7 failed | 61 passed | 111 skipped (179)
+# expected [] to deeply equal [60001,61001] (formatting retained raw)
+# expected [[-60001,'SIGTERM'],[-60001,'SIGKILL']] to deeply equal []
+# Extended same P1 red with wellformed sibling control before implementation:
+# same command → d83-p1-group-red.log, exit1
+# Tests 8 failed | 61 passed | 111 skipped (180)
+# Includes wellformed AND unknown sibling-group failures, no hidden retry.
+# P1 correction → same command → d83-p1-green.log, exit0
+# Tests 69 passed | 111 skipped (180)
+
+# P2 red after P1 green but before P2 source correction, exit1
+"${safe[@]}" exec vitest run test/integration/verification-harness.test.ts --fileParallelism=false -t 'canonical census hardening'
+# d83-p2-red.log: Tests 4 failed | 30 passed | 152 skipped (186)
+# AssertionError: expected [] to deep equally contain StringContaining "manifest torn line"
+# P2 correction + grace restore → same command → d83-p2-green.log, exit0
+# Tests 34 passed | 152 skipped (186)
+
+# Full permitted positive selection, d83-final-green.log, exit0
+"${safe[@]}" exec vitest run test/integration/verification-harness.test.ts --fileParallelism=false -t 'canonical census hardening|canonical preflight read loss|harness manifest audit contract'
+# Tests 104 passed | 82 skipped (186); 16 new cases, original88 are not new-head proof until this run.
+
+# Each exit0; complete stdout/stderr in d83-tsc/build/lint/*-syntax/diff-check.log
+"${safe[@]}" exec tsc --noEmit && "${safe[@]}" build
+"${safe[@]}" exec oxlint scripts/run-integration-harness.mjs scripts/preflight-integration.mjs test/integration/verification-harness.test.ts
+"${safe[@]}" exec node --check scripts/run-integration-harness.mjs
+"${safe[@]}" exec node --check scripts/preflight-integration.mjs
+LEFTHOOK=0 git diff --check
+
+# Source commit, exit0; d83-source-commit.log and d83-source-head.log
+LEFTHOOK=0 git add scripts/preflight-integration.mjs scripts/run-integration-harness.mjs test/integration/verification-harness.test.ts
+LEFTHOOK=0 git commit -m "fix(integration): preserve manual exclusions and reject torn whitespace"
+```
+
+Public regressions include valid→null, null→valid, malformed/torn/foreign/conflicting input with independent later identities, exact duplicates/wellformed controls, manual signature PID + automatic-looking same-group sibling, and continued independent group TERM/KILL while unknown state is refused/preserved. P2 includes space/tab/newline-space/signed-record-plus-space under an empty injected table, preserved signed candidate, empty/complete-blank controls. No assertions/timeouts/tolerance weakened, no default/negative/mixed-file filter, no tests manufactured after their correction as red.
+
+New lossless bounded stdout/stderr logs remain at `/Users/sumodeus/code/sumocode.sumo-worktrees/sumo__v08-canonical-source-revision/.local/canonical-source/logs/` (largest test log6,450 bytes). No old log was copied, overwritten, normalized or relabeled:
+
+```text
+d83-p1-red.log 4420 0a60512bc16420e6f74fc6bb665ab442dd615a4507db33f481e122cb4f4ae794
+d83-p1-group-red.log 4762 2a5ffa65966c63db666a6c0f942578c391b7627a7059cdbf65ff3b1c3a5b7bd6
+d83-p1-green.log 280 c75e633d6db8612600cc88a5524f4aa0b4acb47872177dccaf15b043801ff3e8
+d83-p2-red.log 6450 8e7dea622fe1c45953ab970b9b6e8afd5876044549abfb234957a08ee55263cb
+d83-p2-green.log 5495 9d357644430b4f14ebd57501e41e13aa749a28941fc9a14aa864ce75c97b73e6
+d83-final-green.log 5495 87241af8255149c81bf674e93392f2d8eaf923e67511b832e2ed23521fe33f35
+d83-build.log 136 7c19b53c5290b2dc799afa8ba0f2d782147f6cc8696077b770de8cbe1cd974ef
+install.log 855 a8b4e508a15ac1eca34ab8a76561915f19340118f20677b1936bed1b5451e552
+tool-version.log 17 dac756eed06d6e3604959312cbdcb9e6860fd65ccdd5bb02f53e5ae557cccbfb
+d83-tsc.log / d83-lint.log / d83-runner-syntax.log / d83-preflight-syntax.log / d83-diff-check.log:
+  each0 bytes / e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+```
+
+Identity/protected/source/delta checks are retained in `d83-identities-before-commit.log`; source/evidence Git receipts and final log digests (`d83-final-receipt.log`) are separate from test output. Report-only settlement uses `LEFTHOOK=0 git diff --check`, `LEFTHOOK=0 git add plans/120-spike/canonical-source-hardening-evidence.md`, then `LEFTHOOK=0 git commit -m "docs(integration): record D83 revision evidence and rejected history"`, with full output retained in `d83-evidence-diff-check.log` and `d83-evidence-commit.log`. Empty logs indicate successful silent commands, not omitted output. One exploratory read of nonexistent `.oxlintrc.json` returned ENOENT; actual `oxlint.config.ts` and plugin filesystem owner were read before lint. No source/check failure was suppressed or retried as green.
+
+## Review-ready gate and remaining STOPs
+
+Contract `/Users/sumodeus/.pi/agent/skills/review-ready/contract.md` (bundled default, no applicable repository override in the inventoried literal paths). Changed seam: public inspect→fix and manifestProcessGroups→auditAndReap. Trace: valid spawn + null → partial identity plus unknown → human registeredSurvivor → PID/group exclusion while independent group cleanup continues → unresolved namespace retained; signed spawn + unterminated whitespace → torn failure before skip → candidate retained through the unchanged finite audit.
+
+### Caller-knowledge
+
+Callers still use the existing public interfaces; partial-identity preservation and manual signal exclusion are internal to the owning preflight path, with no new caller policy/seam.
+
+### Deletion
+
+Removing the owning validation/selection would spread the same uncertainty and exclusion policy into inspection/fix callers. No wrapper/module/export/dependency was added.
+
+### Ownership
+
+Dead-census manual identity remains local to preflight; live signed census and grace remain runner-owned. Protected authenticated cleanup stays byte-identical; no authority port.
+
+### Test-surface
+
+Actual owned files through public inspect/fix/census/audit, existing signing helper and full process-I/O replacement. Zero-attempt arrays cover swallowed-signal hazards; positive controls and independent cleanup prevent a blanket-refuse-all shortcut. No internal parser test export or module mock.
+
+Simplification pass: re-read all three changed source/test files top-to-bottom after both greens, traced the representative flows above, and kept only local sets/guards plus the two-line runner change. No refactor needed. Security comments explain available-byte retention and same-group exclusion. Source equality versus475 verifies only the grace declaration, not default-wallclock behavior.
+
+Verification: all authorized scoped checks PASS; overall **INCOMPLETE**. Ordinary src tsconfig does not type integration APIs: **explicit integration API static typing NOT RUN**, no supplemental mixed-file typecheck/baseline repair/waiver. No independent reviewer/delegation launched. Exceptions: confirmed D83 scope overrides build's fetch/per-slice-commit/fullverify/publication flow and the generic completion contract's full runtime gates; one bounded source correction plus report-only commit, source checks only, no approval question.
+
+NOT RUN / STOP unchanged: eager0600wx main/allocation/finalization; actual default wait; CLI or successful preflight; whole mixed file/full tests/integration/native/app/PTY/ps/actual signals/providers/MCP/Herdr/visual/perf/security/currentaudit; admitted signing-owner control plane/raw forwarding/hook-freeESM42/encompassing finalization/repeated signals/retention and after-B quiescence (C3). No live zero-survivor, universal/lifetime coverage, OS sandbox, source privacy, browser driver API/helper/fidelity, SDK/app graph closure or audit-license proof. Browser54 API gap, browser57 local draft/jiti55 held LOCAL NOT SENT, #396 correspondence/#590/currentaudit remain blocked. Lease31 remains released/testedHead null; no runtime successor.
+
+**Next action:** coordinator obtains fresh independent Spec and Standards reviews of the exact D83 source/evidence identities before any reuse. Stop here; no parent apply, adoption or publication.
+
+---
+
+# Historical D80 — rejected old C1/C2 candidate and receipts
+
+Everything below describes original58 at04be/a5/evidence869, **HISTORICAL / SOURCE REJECTED, not adoption or corrected-head proof**. All historical relative `.local/canonical-source/logs/` paths refer ONLY to `/Users/sumodeus/code/sumocode.sumo-worktrees/sumo__v08-canonical-source-hardening/`, not this revision worktree. Original88 PASS hashes/amend history remain historical, unchanged. Original instructions'750-as-existing-default premise was wrong and is corrected above; source execution at750 was nevertheless real.
+
+**Historical bounded source candidate committed; verification INCOMPLETE and source subsequently REJECTED.** Only the delegated C1/C2 source contract was implemented. Synthetic interface checks pass; eager main, C3, actual runtime, signed live admission, and complete process coverage remain NOT RUN / blocked. This is a coordinator handoff, not adoption, publication, release approval, or a source-privacy certificate.
 
 ## 1. Authority and composition manifest
 
@@ -84,7 +231,7 @@ pnpm-lock.yaml blob 2898eea06e4b846b40a9df5866495913a7c014f4
 ## 3. Implemented criteria and tradeoffs
 
 1. **Strict C1 census:** public `{groups, failures}` only; internal raw bytes/file identity stay private. Missing/read-lost/nonregular/symlink, malformed/nonobject/unknown/torn records produce named failures without parse excerpts. Spawn tuples require safe pid/pgid/owner, both nonempty births, expected run ID, and existing HMAC validation before cleanup eligibility. Mode is forced shared. Exact complete authority tuples coalesce; same-pgid conflicts preserve all valid candidates and fail, including across observations.
-2. **Finite C1 cleanup:** full A → per-group guarded cleanup → full B → one pass over newly distinct valid B tuples. B is parsed completely despite torn A, append, replacement, truncation, or loss. Content or file-identity change is non-green, including identical-byte inode replacement. A results survive; outer `wait` exceptions do not skip later known groups. `readProcessTable` exceptions are correctly treated as the reaper's internal unverified result, not an outer throw. Reaped groups and audit records are non-green. Console prefixes remain, with explicit registered-only scope. The existing wait implementation remains; the runner's default grace is 750 ms as requested (NOT exercised with real I/O).
+2. **Finite C1 cleanup:** full A → per-group guarded cleanup → full B → one pass over newly distinct valid B tuples. B is parsed completely despite torn A, append, replacement, truncation, or loss. Content or file-identity change is non-green, including identical-byte inode replacement. A results survive; outer `wait` exceptions do not skip later known groups. `readProcessTable` exceptions are correctly treated as the reaper's internal unverified result, not an outer throw. Reaped groups and audit records are non-green. Console prefixes remain, with explicit registered-only scope. Historical source used runner grace750 ms under the coordinator's incorrect request (NOT exercised with real I/O). Applied475's actual runner default was1,000 ms; this unauthorized change was rejected and restored only in D83. The wait implementation itself remained unchanged; browser750 is separate.
 3. **Eager C1 coupling:** main creates empty `children.jsonl` with mode 0600 and `wx` immediately after writing owner.json. Missing census is fail-closed in the same C1 commit. That main path and allocation/write-failure finalization were NOT RUN and are not claimed fixed.
 4. **Contextual C2 unknowns:** required-root readdir loss is mandatory and fix refuses it. Owner absence differs from invalid I/O/schema/present fields. Current shared `run-*` requires run ID/token, focused lazy absence requires its concrete focused prefix/mode/run/birth, and legacy PID/token/birth or ownerless fake-pi absence is supported only with genuinely absent census and no current shared claim. Present/unreadable legacy census without run authority is unknown. Dead-run schema checks do not verify HMACs without a key; valid postmortem identities remain human-only. Unknown takes precedence over stale and retained and is excluded from both deletion lists.
 5. **Fresh C2 removal boundaries:** both ordinary fix and retained purge freshly classify owner plus census immediately before their existing rm sites. Inspect→mutate owner/census→fix or purge preserves new unknown state and returns unresolved issues. Seven mutations are covered on each boundary; purge permission and ordinary retained notice semantics were not expanded.
@@ -183,7 +330,7 @@ C1 and C2 also each passed ordinary `exec tsc --noEmit` followed by `build`. Fin
 LEFTHOOK=0 git diff --check 475560cf45becbafe81b41a718b4724c1cc871cb HEAD
 ```
 
-No negatives/default test filters, retries, module mocks, new exports, fixture drivers, timeout changes, or baseline rewrites. Every new audit supplies readProcessTable/readProcessStart/currentPgid/kill/wait; every new fix supplies table/rows/readRows/currentPgid/kill/wait. The only real process probes in selected test bodies are the existing non-signaling `kill(pid, 0)` metadata probes on synthetic impossible-dead PID 2147483647; they are not live identity proof. Synthetic audit stdout saying zero registered survivors is not an actual runtime audit.
+Historical checks used no negatives/default test filters, retries, module mocks, new exports, fixture drivers, or baseline rewrites. The original report's no-timeout-change claim was incorrect: source runner grace changed1,000→750 under the coordinator's wrong premise; actual default wait was NOT RUN. D83 restores the declaration without claiming timing equivalence. Every new audit supplies readProcessTable/readProcessStart/currentPgid/kill/wait; every new fix supplies table/rows/readRows/currentPgid/kill/wait. The only real process probes in selected test bodies are the existing non-signaling `kill(pid, 0)` metadata probes on synthetic impossible-dead PID 2147483647; they are not live identity proof. Synthetic audit stdout saying zero registered survivors is not an actual runtime audit.
 
 Full test/install stdout/stderr logs are retained losslessly under `.local/canonical-source/logs/`, each under 5 KB (no failure log overwritten). Key artifacts:
 
@@ -240,4 +387,4 @@ NOT RUN / blocked:
 4. Browser54 public URL/pipe API route remains STOP; browser57 local-doc review and jiti55 remain separate/local. No posting/download/repro/audit/source promotion. #396/#590, adoption, merge, publication, and release remain blocked.
 5. Independent code/spec/standards review: not launched here. Coordinator must review this exact source HEAD and evidence before any apply or reuse. Parent dirty plans/.build, private user state, installed clone, worktree, and historical failures were not modified or cleaned up.
 
-**Next action:** coordinator reviews the isolated `a5abe2cb131e7a94788bab4fb3c986e8bce35888` source candidate and this evidence-only report; no automatic apply/reuse or successor runtime lease.
+**Historical next action (superseded):** coordinator review of isolated `a5abe2cb131e7a94788bab4fb3c986e8bce35888` led to independent59/60 REQUEST CHANGES. Those old source/evidence identities are rejected, not reuse/adoption permission; current D83 next action is above.

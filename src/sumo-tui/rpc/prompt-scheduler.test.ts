@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { createRpcPromptScheduler, RpcPromptPreflightRejection } from "./prompt-scheduler.js";
+import { createRpcPromptScheduler, RpcPromptPreflightRejection, type RpcPromptDeliveryMode } from "./prompt-scheduler.js";
 
 async function flush(): Promise<void> {
 	await Promise.resolve();
@@ -150,5 +150,110 @@ describe("RpcPromptScheduler", () => {
 		await expect(scheduler.submit("/theme", { delivery: "steer" })).resolves.toBe("handled");
 		expect(sendPrompt).not.toHaveBeenCalled();
 		expect(scheduler.getSnapshot().localQueue).toEqual([]);
+	});
+});
+
+interface DeferredDelivery {
+	readonly promise: Promise<RpcPromptDeliveryMode>;
+	readonly resolve: (mode: RpcPromptDeliveryMode) => void;
+}
+
+describe("RpcPromptScheduler auto delivery", () => {
+	function deferredDelivery(): DeferredDelivery {
+		let resolve: (mode: RpcPromptDeliveryMode) => void = () => undefined;
+		const promise = new Promise<RpcPromptDeliveryMode>((settle) => { resolve = settle; });
+		return { promise, resolve };
+	}
+
+	it("lets the decider pick a busy submission's delivery, with the run's prompt as context", async () => {
+		let busy = false;
+		const decision = deferredDelivery();
+		const decideDelivery = vi.fn(() => decision.promise);
+		const sendPrompt = vi.fn(async () => undefined);
+		const scheduler = createRpcPromptScheduler({ getBusy: () => busy, decideDelivery, sendPrompt });
+
+		await scheduler.submit("refactor the scheduler", { delivery: "auto" });
+		busy = true;
+		await expect(scheduler.submit("after that, look at issue 412", { delivery: "auto" })).resolves.toBe("queued");
+		expect(scheduler.getSnapshot().queuedMessages).toEqual(["after that, look at issue 412"]);
+
+		decision.resolve("followUp");
+		await flush();
+		await flush();
+
+		expect(decideDelivery).toHaveBeenCalledWith("after that, look at issue 412", "refactor the scheduler");
+		expect(sendPrompt.mock.calls).toEqual([
+			["refactor the scheduler", { streamingBehavior: "steer" }],
+			["after that, look at issue 412", { streamingBehavior: "followUp" }],
+		]);
+		expect(scheduler.getSnapshot().queuedMessages).toEqual([]);
+	});
+
+	it("keeps later submissions behind a message whose delivery is still being decided", async () => {
+		const decision = deferredDelivery();
+		const sent: string[] = [];
+		const scheduler = createRpcPromptScheduler({
+			getBusy: () => true,
+			decideDelivery: () => decision.promise,
+			sendPrompt: async (message) => { sent.push(message); },
+		});
+
+		await scheduler.submit("first", { delivery: "auto" });
+		await expect(scheduler.submit("second", { delivery: "steer" })).resolves.toBe("queued");
+		expect(sent).toEqual([]);
+
+		decision.resolve("steer");
+		await flush();
+		await flush();
+		expect(sent).toEqual(["first", "second"]);
+	});
+
+	it("skips the decider when idle, for commands, and when no decider is wired", async () => {
+		let busy = false;
+		const decideDelivery = vi.fn(async (): Promise<RpcPromptDeliveryMode> => "followUp");
+		const sendPrompt = vi.fn(async () => undefined);
+		const scheduler = createRpcPromptScheduler({ getBusy: () => busy, decideDelivery, sendPrompt });
+		const undecided = createRpcPromptScheduler({ getBusy: () => true, sendPrompt });
+
+		await expect(scheduler.submit("start", { delivery: "auto" })).resolves.toBe("sent");
+		busy = true;
+		await expect(scheduler.submit("/skill:review", { delivery: "auto" })).resolves.toBe("sent");
+		await undecided.submit("no key", { delivery: "auto" });
+		await flush();
+		await flush();
+
+		expect(decideDelivery).not.toHaveBeenCalled();
+		expect(sendPrompt.mock.calls).toEqual([
+			["start", { streamingBehavior: "steer" }],
+			["/skill:review", { streamingBehavior: "steer" }],
+			["no key", { streamingBehavior: "steer" }],
+		]);
+	});
+
+	it("steers when the decider rejects", async () => {
+		const sendPrompt = vi.fn(async () => undefined);
+		const scheduler = createRpcPromptScheduler({
+			getBusy: () => true,
+			decideDelivery: async () => { throw new Error("boom"); },
+			sendPrompt,
+		});
+
+		await scheduler.submit("fix it", { delivery: "auto" });
+		await flush();
+		await flush();
+		expect(sendPrompt.mock.calls).toEqual([["fix it", { streamingBehavior: "steer" }]]);
+	});
+
+	it("drops the send when the queue is restored to the editor while Jev decides", async () => {
+		const decision = deferredDelivery();
+		const sendPrompt = vi.fn(async () => undefined);
+		const scheduler = createRpcPromptScheduler({ getBusy: () => true, decideDelivery: () => decision.promise, sendPrompt });
+
+		await scheduler.submit("maybe later", { delivery: "auto" });
+		expect(scheduler.restoreAll("").text).toBe("maybe later");
+		decision.resolve("followUp");
+		await flush();
+		await flush();
+		expect(sendPrompt).not.toHaveBeenCalled();
 	});
 });

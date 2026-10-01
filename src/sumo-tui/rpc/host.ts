@@ -45,9 +45,11 @@ import {
 	createRpcPromptScheduler,
 	RpcPromptPreflightRejection,
 	type RpcPromptDelivery,
-	type RpcPromptDeliveryMode,
 	type RpcPromptScheduler,
+	type RpcQueueMode,
 } from "./prompt-scheduler.js";
+import { createJevDeliveryDecider } from "./auto-delivery.js";
+import { typesafeChoiceClassifier } from "../../judgment.js";
 import { RpcHostRuntime } from "./runtime.js";
 import { responseData } from "./response.js";
 import { notifyOnError, type ErrorNotifier } from "./safe-send.js";
@@ -627,7 +629,7 @@ export interface RpcPromptSubmitOptions {
 	readonly stateStore?: Pick<RpcHostStateStore, "getSnapshot">;
 	readonly client: Pick<SumoRpcClient, "send">;
 	readonly onBeforeSend?: (message: string) => void;
-	readonly delivery?: RpcPromptDeliveryMode;
+	readonly delivery?: RpcQueueMode;
 }
 
 export async function submitRpcPrompt(message: string, options: RpcPromptSubmitOptions): Promise<void> {
@@ -650,21 +652,21 @@ export interface EditorSubmitReadinessGate {
 export interface EditorSubmitHandlerDependencies {
 	readonly gate: EditorSubmitReadinessGate;
 	readonly notifications: ErrorNotifier;
-	readonly submit: (message: string, delivery?: RpcPromptDeliveryMode) => Promise<void>;
+	readonly submit: (message: string, delivery?: RpcQueueMode) => Promise<void>;
 	readonly submitImageDraft?: (draft: RpcEditorSubmissionDraft) => Promise<void>;
 	readonly requestExit: (code: number) => void;
 	readonly isTreeBusy: () => boolean;
 }
 
 export interface EditorSubmitHandlers {
-	readonly fromEditor: (message: string, delivery?: RpcPromptDeliveryMode) => Promise<void>;
-	readonly fromEditorDraft: (draft: RpcEditorSubmissionDraft, delivery?: RpcPromptDeliveryMode) => Promise<void>;
+	readonly fromEditor: (message: string, delivery?: RpcQueueMode) => Promise<void>;
+	readonly fromEditorDraft: (draft: RpcEditorSubmissionDraft, delivery?: RpcQueueMode) => Promise<void>;
 	readonly fromLaunch: (message: string) => Promise<void>;
 }
 
 /** Keeps early editing responsive while command dispatch waits for hydration. */
 export function createEditorSubmitHandlers(deps: EditorSubmitHandlerDependencies): EditorSubmitHandlers {
-	const submit = async (message: string, notifyWhenQueued: boolean, delivery?: RpcPromptDeliveryMode): Promise<void> => {
+	const submit = async (message: string, notifyWhenQueued: boolean, delivery?: RpcQueueMode): Promise<void> => {
 		const trimmed = message.trim();
 		if (trimmed.length === 0) return;
 		// /quit is entirely host-owned and must remain available when the child
@@ -1506,7 +1508,10 @@ async function runRpcHostSession(options: RpcHostMainOptions, lifecycle: RpcHost
 			},
 		});
 	};
+	const typesafeApiKey = env.TYPESAFE_API_KEY?.trim();
+	const decideDelivery = typesafeApiKey ? createJevDeliveryDecider(typesafeChoiceClassifier(typesafeApiKey)) : undefined;
 	const scheduler = createRpcPromptScheduler({
+		decideDelivery,
 		getBusy: () => {
 			const state = stateStore.getSnapshot();
 			return treeNavigationBusy || state.isStreaming || state.isCompacting;
@@ -2092,6 +2097,7 @@ async function runRpcHostSession(options: RpcHostMainOptions, lifecycle: RpcHost
 		overlays,
 		inlineSelectors,
 		notifications,
+		autoDeliveryAvailable: decideDelivery !== undefined,
 		editorText: editor,
 		onStateChange: pushStateAndCacheChrome,
 		onRenderRequest: requestRender,

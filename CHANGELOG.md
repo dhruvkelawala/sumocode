@@ -10,6 +10,15 @@ landed between the original scaffold and this release.
 
 ## [Unreleased]
 
+### Added
+- **`/queue auto`** — a third delivery mode in which TypeSafe's Jev
+  classifier picks steer or follow-up for each message sent while the agent is
+  busy. The message and the prompt that started the run go to TypeSafe; Jev
+  must be confident to choose follow-up, and anything else, including a
+  missing `TYPESAFE_API_KEY`, a timeout, or an error, steers as before. Auto is
+  opt-in per session, and the delivery toggle key leaves it for `steer`. The
+  classifier call lives in a reusable `judgeChoice` primitive (`src/judgment.ts`).
+
 ## [0.7.6] — 2026-09-30
 
 The Herdr sidebar can show what each SumoCode agent is working on.

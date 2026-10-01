@@ -4,7 +4,7 @@ import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSyn
 import { copyFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
-import { spawn as spawnPty, } from "node-pty";
+import { spawn as spawnPty } from "node-pty";
 import { prepareHarnessAdmission } from "./harness-admission.mjs";
 import {
 	HARNESS_OWNER_TOKEN_ENV_KEY,
@@ -540,8 +540,10 @@ export function recordPtyExit(pid, pgid, exitCode, signal, env) {
 	appendLifecycleManifest({ event: "exit", pid, pgid, code: exitCode, signal, kind: "pty" }, env, liveProcessStart(pid));
 }
 
-// Register at import time so every focused Vitest file that imports this seam gets a final
-// process-group audit, even when a test fails before it can register its own cleanup hook.
+// The TS facade (harness-supervisor.ts) registers this as a Vitest afterAll hook at import
+// time, so every focused Vitest file that imports this seam gets a final process-group audit,
+// even when a test fails before it can register its own cleanup hook. This function owns the
+// focused-namespace cleanup body.
 export async function finalizeFocusedNamespace() {
 	if (fallbackRoot === undefined) return;
 	const root = fallbackRoot;

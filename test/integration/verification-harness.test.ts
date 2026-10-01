@@ -12,6 +12,7 @@ import {
 	HARNESS_SIGNATURE,
 	HARNESS_SIGNATURE_ENV_KEY,
 	HARNESS_SIGNING_KEY_ENV_KEY,
+	spawnSupervisedApp,
 	spawnSupervisedProcess,
 	supervisePtyProcess,
 	waitForDiagnosticReadiness,
@@ -129,6 +130,22 @@ describe("verification harness v2 seam", () => {
 		}
 		// One condition check and one final check do not establish a polling wait.
 		expect(probes).toBeGreaterThan(2);
+	});
+
+	it("execs the default app workload into its registered PID", async () => {
+		vi.stubEnv("SUMOCODE_TEST_SANDBOX", "");
+		try {
+			const child = spawnSupervisedApp(process.execPath, ["-e",
+				"process.title = 'pi'; process.stdout.write(String(process.pid)); setInterval(() => {}, 1000);",
+			], { env: { ...process.env }, stdio: ["ignore", "pipe", "pipe"] });
+			children.push(child);
+			const [data] = await once(child.child.stdout!, "data");
+			expect(Number(String(data))).toBe(child.pid);
+			expect(processRows().rows.find((row) => row.pid === child.pid))
+				.toMatchObject({ pgid: child.pgid, command: "pi" });
+		} finally {
+			vi.unstubAllEnvs();
+		}
 	});
 
 	it("reaps a title-changing child through the public supervised spawn seam", async () => {

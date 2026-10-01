@@ -210,19 +210,19 @@ async function classifyHarnessDir(path, rowsByPid = new Map(), tokenIdentityAvai
 	if (census.issue) return { ...unverifiedHarnessDir(path, "harness-census-unverified", census.issue), registrations: census.registrations };
 	if (owner !== undefined && pidIsAlive(owner.pid)) {
 		if (owner.ownerToken !== undefined) {
-			if (!tokenIdentityAvailable) return { classification: "live", owner };
+			if (!tokenIdentityAvailable) return { classification: "live", owner, registrations: census.registrations };
 			const row = rowsByPid.get(owner.pid);
-			if (row !== undefined && hasProcessMarker(row, HARNESS_OWNER_TOKEN_ENV_KEY, owner.ownerToken)) return { classification: "live", owner };
+			if (row !== undefined && hasProcessMarker(row, HARNESS_OWNER_TOKEN_ENV_KEY, owner.ownerToken)) return { classification: "live", owner, registrations: census.registrations };
 		} else if (owner.ownerProcessStart !== undefined) {
 			// Tokenless focused namespaces: identity = OS-reported start time of
 			// the recorded pid. A reused PID is a different process with a
 			// different start time, so the namespace classifies stale and --fix
 			// can reclaim it (Codex cycle-4, PR #422).
-			if (liveProcessStart(owner.pid) === owner.ownerProcessStart) return { classification: "live", owner };
+			if (liveProcessStart(owner.pid) === owner.ownerProcessStart) return { classification: "live", owner, registrations: census.registrations };
 		} else {
 			// Legacy namespaces with neither identity field keep the original
 			// PID-liveness behavior.
-			return { classification: "live", owner };
+			return { classification: "live", owner, registrations: census.registrations };
 		}
 	}
 	return { classification: existsSync(join(path, RETAINED_EVIDENCE_MARKER)) ? "retained" : "stale", registrations: census.registrations };
@@ -252,9 +252,9 @@ async function harnessState(tempRoot, rowsByPid, tokenIdentityAvailable) {
 }
 
 /**
- * Spawn registrations left by a run whose owner is gone. No key survives a
- * dead runner that a same-user child could not also have read, so these are
- * identity records for a human, never proof that authorizes a signal.
+ * Census identities also name reparented survivors while a namespace owner
+ * is still live. No key survives a dead runner that a same-user child could
+ * not also have read: these records never authorize a signal.
  */
 /* oxlint-disable anti-slop/no-runtime-typeof -- Postmortem records are schema-checked only; the signing key is gone and these never authorize signals. */
 function deadManifestEventIsValid(event, runId) {

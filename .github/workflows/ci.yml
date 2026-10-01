@@ -8,6 +8,7 @@ on:
   push:
     branches:
       - main
+      - sumo/v08-integration
   workflow_dispatch:
 
 jobs:

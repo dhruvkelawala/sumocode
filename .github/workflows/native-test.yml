@@ -1,0 +1,52 @@
+name: Native test
+
+on:
+  pull_request:
+  push:
+    branches:
+      - sumo/v08-integration
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  native-test:
+    name: macos-arm64 native contracts
+    runs-on: macos-14
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.29.2
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Setup pinned Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: .bun-version
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build and test native archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 022
+          chmod go-w "$(realpath "$(command -v node)")"
+          # Match release setup; the native builder ad-hoc signs both executables.
+          helper="node_modules/node-pty/prebuilds/darwin-arm64/spawn-helper"
+          ls -l "$helper"
+          chmod u+x "$helper"
+          pnpm test:native

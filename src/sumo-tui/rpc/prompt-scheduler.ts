@@ -92,6 +92,8 @@ class DefaultRpcPromptScheduler implements RpcPromptScheduler {
 	private currentTask: string | undefined;
 	private generation = 0;
 	private lifecycleBusy = false;
+	/** An idle prompt was sent and Pi's `agent_start` for it has not arrived yet. */
+	private awaitingRunStart = false;
 	private dispatchCount = 0;
 	private pausedAfterFailure = false;
 	private flushing = false;
@@ -106,7 +108,7 @@ class DefaultRpcPromptScheduler implements RpcPromptScheduler {
 		const compacting = this.options.getCompacting?.() === true;
 		const command = message.trimStart().startsWith("/");
 		const busy = this.isBusy();
-		if (!busy && !command) this.currentTask = message;
+		if (!busy) this.currentTask = message;
 		if (compacting && command) {
 			void this.dispatch({ text: message, delivery: options.delivery === "auto" ? "steer" : options.delivery }, this.generation, false);
 			return "sent";
@@ -125,11 +127,15 @@ class DefaultRpcPromptScheduler implements RpcPromptScheduler {
 			void this.flush(this.generation);
 			return "queued";
 		}
+		// The UI paints the run as started on dispatch; count it busy from here too, so an
+		// `auto` message typed before Pi's agent_start arrives is still judged.
+		if (!busy && !command) this.awaitingRunStart = true;
 		void this.dispatch({ text: message, delivery }, this.generation, false);
 		return "sent";
 	}
 
 	public handleAgentEvent(event: RpcSchedulerEvent): void {
+		if (event.type === "agent_start" || event.type === "agent_settled") this.awaitingRunStart = false;
 		if (event.type === "agent_start") this.lifecycleBusy = true;
 		if (event.type === "agent_settled") {
 			this.lifecycleBusy = false;
@@ -151,6 +157,7 @@ class DefaultRpcPromptScheduler implements RpcPromptScheduler {
 		const restored = this.restoreAll(currentDraft);
 		this.sessionId = sessionId;
 		this.lifecycleBusy = false;
+		this.awaitingRunStart = false;
 		this.currentTask = undefined;
 		return restored;
 	}
@@ -195,7 +202,7 @@ class DefaultRpcPromptScheduler implements RpcPromptScheduler {
 	}
 
 	private isBusy(): boolean {
-		return this.lifecycleBusy || this.options.getBusy?.() === true;
+		return this.lifecycleBusy || this.awaitingRunStart || this.options.getBusy?.() === true;
 	}
 
 	private async decideDelivery(message: string): Promise<RpcPromptDeliveryMode> {
@@ -212,6 +219,8 @@ class DefaultRpcPromptScheduler implements RpcPromptScheduler {
 			await this.options.sendPrompt(entry.text, { streamingBehavior: entry.delivery });
 			return generation === this.generation;
 		} catch (error) {
+			// A failed send started no run, or its agent_start will say otherwise.
+			this.awaitingRunStart = false;
 			if (generation !== this.generation) {
 				this.options.onDispatchFailure?.(entry.text, error);
 				return false;

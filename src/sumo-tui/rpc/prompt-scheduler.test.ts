@@ -230,6 +230,41 @@ describe("RpcPromptScheduler auto delivery", () => {
 		]);
 	});
 
+	it("judges a message typed after an idle prompt is sent but before Pi reports agent_start", async () => {
+		const decideDelivery = vi.fn(async (): Promise<RpcPromptDeliveryMode> => "followUp");
+		const sendPrompt = vi.fn(async () => undefined);
+		const scheduler = createRpcPromptScheduler({ getBusy: () => false, decideDelivery, sendPrompt });
+
+		await scheduler.submit("refactor the scheduler", { delivery: "auto" });
+		await scheduler.submit("after that, open a PR", { delivery: "auto" });
+		await flush();
+		await flush();
+
+		expect(decideDelivery).toHaveBeenCalledWith("after that, open a PR", "refactor the scheduler");
+		expect(sendPrompt.mock.calls.at(-1)).toEqual(["after that, open a PR", { streamingBehavior: "followUp" }]);
+
+		// Once the run settles, the next message is idle again and skips Jev.
+		scheduler.handleAgentEvent({ type: "agent_start" });
+		scheduler.handleAgentEvent({ type: "agent_settled" });
+		await scheduler.submit("new task", { delivery: "auto" });
+		expect(decideDelivery).toHaveBeenCalledTimes(1);
+	});
+
+	it("stops counting a rejected idle prompt as a run", async () => {
+		const decideDelivery = vi.fn(async (): Promise<RpcPromptDeliveryMode> => "followUp");
+		const scheduler = createRpcPromptScheduler({
+			getBusy: () => false,
+			decideDelivery,
+			sendPrompt: async () => { throw new RpcPromptPreflightRejection("no model"); },
+		});
+
+		await scheduler.submit("first", { delivery: "auto" });
+		await flush();
+		await scheduler.submit("second", { delivery: "auto" });
+		await flush();
+		expect(decideDelivery).not.toHaveBeenCalled();
+	});
+
 	it("steers when the decider rejects", async () => {
 		const sendPrompt = vi.fn(async () => undefined);
 		const scheduler = createRpcPromptScheduler({

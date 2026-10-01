@@ -47,7 +47,7 @@ describe("typesafeChoiceClassifier", () => {
 	it("asks Jev one choice question and reads its answer", async () => {
 		const requests: Request[] = [];
 		const body = JSON.stringify({ answers: { answer: { type: "choice", choice: "yes", confidence: 0.94, probabilities: { yes: 0.97, no: 0.03 } } } });
-		const classify = typesafeChoiceClassifier("ts-key", fetchReturning(200, body, requests));
+		const classify = typesafeChoiceClassifier("ts-key", undefined, fetchReturning(200, body, requests));
 
 		await expect(classify({ message: "hi" }, question, new AbortController().signal)).resolves.toEqual(
 			expect.objectContaining({ choice: "yes", confidence: 0.94 }),
@@ -62,9 +62,15 @@ describe("typesafeChoiceClassifier", () => {
 		});
 	});
 
+	it("posts to a TYPESAFE_BASE_URL-style API root instead of the default", async () => {
+		const requests: Request[] = [];
+		await typesafeChoiceClassifier("k", "http://127.0.0.1:9/", fetchReturning(500, "", requests))({ message: "hi" }, question, new AbortController().signal);
+		expect(requests[0]?.url).toBe("http://127.0.0.1:9/v1/systemone");
+	});
+
 	it("returns undefined for an error status or a malformed body", async () => {
 		const signal = new AbortController().signal;
-		await expect(typesafeChoiceClassifier("k", fetchReturning(401, "{}"))({ message: "hi" }, question, signal)).resolves.toBeUndefined();
-		await expect(typesafeChoiceClassifier("k", fetchReturning(200, '{"answers":{"answer":{"choice":3}}}'))({ message: "hi" }, question, signal)).resolves.toBeUndefined();
+		await expect(typesafeChoiceClassifier("k", undefined, fetchReturning(401, "{}"))({ message: "hi" }, question, signal)).resolves.toBeUndefined();
+		await expect(typesafeChoiceClassifier("k", undefined, fetchReturning(200, '{"answers":{"answer":{"choice":3}}}'))({ message: "hi" }, question, signal)).resolves.toBeUndefined();
 	});
 });

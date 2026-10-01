@@ -606,7 +606,7 @@ describe("RpcHostActions", () => {
 		const keyless = setup();
 		await keyless.actions.handleSubmittedText("/queue auto");
 		expect(keyless.stateChanges.at(-1)?.promptDeliveryMode).toBe("auto");
-		expect(keyless.notifications).toEqual([{ message: "Queue mode: auto · TYPESAFE_API_KEY not set, messages steer", level: "warning" }]);
+		expect(keyless.notifications).toEqual([{ message: "Queue mode: auto · no TYPESAFE_API_KEY", level: "warning" }]);
 	});
 
 	it("routes the delivery-toggle keybinding through the same /queue path", () => {

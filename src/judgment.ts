@@ -4,7 +4,8 @@
  * its own default when the classifier is slow, unreachable, or unsure.
  */
 
-const TYPESAFE_SYSTEM_ONE_URL = "https://api.typesafe.ai/v1/systemone";
+/** TypeSafe's API root; its SDKs read an override from `TYPESAFE_BASE_URL`. */
+export const TYPESAFE_DEFAULT_BASE_URL = "https://api.typesafe.ai";
 const DEFAULT_TIMEOUT_MS = 600;
 
 /** Named text fields the classifier reads; questions reference them as `field`. */
@@ -45,9 +46,10 @@ export async function judgeChoice<Option extends string>(
 }
 
 /** TypeSafe's System One API (Jev) over `fetch`. */
-export function typesafeChoiceClassifier(apiKey: string, fetchImpl: typeof fetch = fetch): ChoiceClassifier {
+export function typesafeChoiceClassifier(apiKey: string, baseUrl = TYPESAFE_DEFAULT_BASE_URL, fetchImpl: typeof fetch = fetch): ChoiceClassifier {
+	const endpoint = `${baseUrl.replace(/\/+$/u, "")}/v1/systemone`;
 	return async (state, question, signal) => {
-		const response = await fetchImpl(TYPESAFE_SYSTEM_ONE_URL, {
+		const response = await fetchImpl(endpoint, {
 			method: "POST",
 			signal,
 			headers: { authorization: `Bearer ${apiKey}`, "content-type": "application/json" },

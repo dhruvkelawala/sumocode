@@ -744,7 +744,7 @@ export class RpcHostActions {
 		// Transient (the notification centre expires it): the mode is worth naming
 		// at the moment it changes, not in every hint row afterwards.
 		if (mode === "auto" && !this.autoDeliveryAvailable) {
-			notify(this.notifications, "Queue mode: auto · TYPESAFE_API_KEY not set, messages steer", "warning");
+			notify(this.notifications, "Queue mode: auto · no TYPESAFE_API_KEY", "warning");
 			return;
 		}
 		notify(this.notifications, `Queue mode: ${RPC_PROMPT_DELIVERY_LABELS[mode]}`);

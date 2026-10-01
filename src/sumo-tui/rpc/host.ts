@@ -1509,7 +1509,9 @@ async function runRpcHostSession(options: RpcHostMainOptions, lifecycle: RpcHost
 		});
 	};
 	const typesafeApiKey = env.TYPESAFE_API_KEY?.trim();
-	const decideDelivery = typesafeApiKey ? createJevDeliveryDecider(typesafeChoiceClassifier(typesafeApiKey)) : undefined;
+	const decideDelivery = typesafeApiKey
+		? createJevDeliveryDecider(typesafeChoiceClassifier(typesafeApiKey, env.TYPESAFE_BASE_URL?.trim() || undefined))
+		: undefined;
 	const scheduler = createRpcPromptScheduler({
 		decideDelivery,
 		getBusy: () => {

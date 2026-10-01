@@ -15,8 +15,9 @@ describe("openWebLink", () => {
 	it("passes the complete URL as one argument without a shell or inherited pipes", async () => {
 		const url = `https://claude.com/cai/auth/authorize?state=${"x".repeat(180)}&redirect_uri=http%3A%2F%2Flocalhost%3A12345%2Fcallback&literal=$(echo_test)`;
 		expect(await openWebLink(url, launch)).toBe(true);
-		const command = process.platform === "darwin" ? "open" : process.platform === "win32" ? "explorer.exe" : "xdg-open";
-		expect(launch).toHaveBeenCalledExactlyOnceWith(command, [url], { detached: true, stdio: "ignore" });
+		const command = process.platform === "darwin" ? "open" : process.platform === "win32" ? "rundll32.exe" : "xdg-open";
+		const args = process.platform === "win32" ? ["url.dll,FileProtocolHandler", url] : [url];
+		expect(launch).toHaveBeenCalledExactlyOnceWith(command, args, { detached: true, stdio: "ignore" });
 	});
 
 	it.each(["not a URL", "javascript:alert(1)", "file:///tmp/test", "data:text/html,test", "https://example.com/\nsecret", "https://example.com/\x1b[0m"])("refuses unsafe target %j before spawning", async (url) => {
@@ -24,14 +25,14 @@ describe("openWebLink", () => {
 		expect(launch).not.toHaveBeenCalled();
 	});
 
-	it("reports Windows dispatch without mistaking Explorer's exit 1 for failure", async () => {
+	it("dispatches the complete Windows query through the URL protocol handler", async () => {
 		vi.stubGlobal("process", { ...process, platform: "win32" });
-		const opened = openWebLink("https://example.com", launch);
+		const url = "https://example.com/authorize?state=a=b&comma=a,b&literal=$(echo_test)";
+		const opened = openWebLink(url, launch);
 		const child = launch.mock.results[0].value;
 		const unref = vi.spyOn(child, "unref");
 		expect(await opened).toBe(true);
-		child.emit("exit", 1, null);
-		expect(launch.mock.calls[0][0]).toBe("explorer.exe");
+		expect(launch).toHaveBeenCalledExactlyOnceWith("rundll32.exe", ["url.dll,FileProtocolHandler", url], { detached: true, stdio: "ignore" });
 		expect(unref).toHaveBeenCalledOnce();
 	});
 

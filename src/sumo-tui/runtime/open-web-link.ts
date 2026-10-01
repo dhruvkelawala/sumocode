@@ -10,9 +10,11 @@ export async function openWebLink(
 		if (/[\x00-\x1f\x7f]/.test(url)) return false;
 		const protocol = new URL(url).protocol;
 		if (protocol !== "https:" && protocol !== "http:") return false;
-		const command = process.platform === "darwin" ? "open" : process.platform === "win32" ? "explorer.exe" : "xdg-open";
-		const child = launch(command, [url], { detached: true, stdio: "ignore" });
-		// Browser launchers can outlive the handoff or exit 1 on Windows.
+		const command = process.platform === "darwin" ? "open" : process.platform === "win32" ? "rundll32.exe" : "xdg-open";
+		// Match Pi's URL handler: Explorer splits unquoted '=' and ',' fields.
+		const args = process.platform === "win32" ? ["url.dll,FileProtocolHandler", url] : [url];
+		const child = launch(command, args, { detached: true, stdio: "ignore" });
+		// Browser launchers can outlive the handoff.
 		// Report dispatch, not browser lifetime; never kill a launched browser.
 		return await new Promise<boolean>((resolve) => {
 			child.once("error", () => resolve(false));

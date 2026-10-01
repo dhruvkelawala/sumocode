@@ -767,10 +767,22 @@ describe("RpcShellAdapter mouse drag-select + OSC52 copy", () => {
 			expect(openLink).not.toHaveBeenCalled();
 			expect(terminal.clipboardSequences).toHaveLength(1);
 
+			// A secondary-button chord must cancel opening, not a primary drag's copy.
+			router.handleInput(sgr(0, start.col, "M") + sgr(32, start.col + 4, "M") + sgr(2, start.col + 4, "M") + sgr(0, start.col + 4, "m"));
+			expect(openLink).not.toHaveBeenCalled();
+			expect(terminal.clipboardSequences).toHaveLength(2);
+			router.handleInput(sgr(0, start.col, "M") + sgr(2, start.col, "M") + sgr(0, start.col, "m"));
+			expect(openLink).not.toHaveBeenCalled();
+
 			openLink.mockResolvedValueOnce(false);
 			router.handleInput(sgr(0, start.col, "M") + sgr(0, start.col, "m"));
 			await Promise.resolve();
 			expect(notifications.notifications).toContainEqual({ message: "unable to open link in the browser", level: "error" });
+
+			openLink.mockRejectedValueOnce(new Error("browser bridge unavailable"));
+			router.handleInput(sgr(0, start.col, "M") + sgr(0, start.col, "m"));
+			await vi.waitFor(() => expect(notifications.notifications).toHaveLength(2));
+			expect(notifications.notifications[1]).toEqual({ message: "unable to open link in the browser", level: "error" });
 		} finally {
 			adapter.dispose();
 			resetCapabilitiesCache();

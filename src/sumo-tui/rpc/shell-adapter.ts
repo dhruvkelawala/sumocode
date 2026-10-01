@@ -211,7 +211,7 @@ export class RpcShellAdapter {
 			onLinkActivated: (url) => {
 				void (options.openLink ?? openWebLink)(url).then((opened) => {
 					if (!opened) this.notifications?.notify?.("unable to open link in the browser", "error");
-				});
+				}).catch(() => this.notifications?.notify?.("unable to open link in the browser", "error"));
 			},
 			emitClipboard: (sequence) => {
 				options.terminal.writeClipboardSequence?.(sequence);
@@ -293,7 +293,8 @@ export class RpcShellAdapter {
 			// render at those coordinates instead of the text the user
 			// actually dragged over. Clearing unconditionally on any
 			// transcript application is the simplest rule that stays correct
-			// for both paths.
+			// for both paths. Pending link presses share that coordinate lifetime
+			// and are cancelled too.
 			this.selection.clear();
 		}
 		if (snapshot.activities) {

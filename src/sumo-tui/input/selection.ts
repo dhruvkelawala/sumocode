@@ -208,13 +208,11 @@ export class SelectionController {
 			if (!this.dragging || !this.anchor) return false;
 			return this.handleMouseEvent({ ...event, type: "drag", button: PRIMARY_BUTTON }, buffer);
 		}
-		if (event.type === "down") {
-			// A new press supersedes a gesture whose release was lost, even if
-			// this button or target cannot start a selection.
-			this.dragging = false;
-			this.pressedLink = undefined;
-		}
+		// Any new press cancels a pending link, even a rejected button/target.
+		// Only a primary press replaces selection; a button chord can still copy.
+		if (event.type === "down") this.pressedLink = undefined;
 		if (event.button !== undefined && event.button !== PRIMARY_BUTTON) return false;
+		if (event.type === "down") this.dragging = false;
 
 		const point = normalizePoint({ row: event.row, col: event.col }, buffer);
 		if (event.type === "down") {

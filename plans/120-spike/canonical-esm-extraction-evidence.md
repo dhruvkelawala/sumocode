@@ -1,3 +1,37 @@
+# D93 readable cleanup
+
+**STATIC CHECKS PASS; no behavioral/runtime certification.** This section supersedes
+D91's padding retention, byte-equality requirement and two static failure statuses;
+the historical D91 record below is unchanged.
+
+- Starting clean HEAD: `562f472c00510115eba0cdc9b0f273f894b6c8be`.
+- D93 source cleanup: `146e3bd043e6429234f346a2502e30fb1adcc5e3`.
+- D93 evidence: sole report-only child of that source commit; exact SHA is recorded
+  after commit in `.local/canonical-esm-revision/d93-final-manifest.json` (no self-hash loop).
+- Only the two MJS sources changed: erasure padding/trailing whitespace removed;
+  original comments and tokens retained. One justified block disable covers the
+  audit-record predicate's five `anti-slop/no-runtime-typeof` guards, following
+  preflight precedent. No lint configuration or other suppression changed.
+
+Equivalence proof: **exit 0, both committed files byte-identical after esbuild
+transform** with `{ loader: "js", format: "esm", minifyWhitespace: true,
+legalComments: "none" }`; no syntax/identifier minification. Expected inputs are
+Node24 `stripTypeScriptTypes` of pristine `03e456ac` TS plus only the three allowed
+supervisor edits. Tradeoff: formatting and lint comments may differ, but normalized
+emitted code must match; this is static preservation, not runtime validation.
+Proof script/output: `.local/canonical-esm-revision/proof-d93.mjs` and
+`d93-proof.{stdout,stderr,exit}`; Node's experimental warning is retained.
+
+Checks ran once each (cached Node24/pnpm10.29.2, requested environment unset):
+- Targeted oxlint on both MJS: **0**.
+- `git diff --check 03e456ac..HEAD -- test/integration tsconfig.integration-facades.json`: **0**, at source HEAD.
+- `pnpm exec tsc -p tsconfig.integration-facades.json --noEmit`: **0**.
+- `node --check` core: **0**; admission: **0**.
+- `pnpm exec tsc --noEmit`: **0**; conditional `pnpm build`: **0**.
+
+Receipts: `.local/canonical-esm-revision/d93-*.{command,stdout,stderr,exit}`.
+No tests, workload imports/evaluation, app/harness spawns, or publication occurred.
+
 # D91 S1 — corrected declaration input, exact pristine ESM extraction
 
 **INCOMPLETE / STATIC SOURCE ONLY / NOT REVIEW-READY.** The bounded extraction is preserved in one source/config commit, but targeted lint failed with five diagnostics and Git's whitespace check failed with 64 diagnostics. No repair, suppression, normalization, lint retry, workload import, behavioral test, runtime adoption or publication followed. Narrow corrected-input typing, successful declaration generation, facade typing, MJS syntax, exact byte correspondence, protected-source checks, root typecheck and build passed. Those passes do not waive either failure or certify runtime behavior.

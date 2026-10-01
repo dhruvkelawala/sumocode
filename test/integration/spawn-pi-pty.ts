@@ -1,4 +1,5 @@
 import { appendFileSync, chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { createTestAgentDir } from "../../scripts/sandbox/wrap-app.mjs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
@@ -197,6 +198,7 @@ const CHILD_ENV_ALLOWLIST = new Set([
 	"SUMOCODE_INTEGRATION_RUN_ROOT",
 	"SUMOCODE_INTEGRATION_MANIFEST",
 	"SUMOCODE_INTEGRATION_PACKAGE_ROOT",
+	"SUMOCODE_TEST_SANDBOX",
 ]);
 
 // Only native fixtures opt into this policy; existing integration env semantics stay intact.
@@ -267,6 +269,9 @@ export function buildSpawnEnv(
 		env.SUMOCODE_INTEGRATION_RUN_ROOT = runRoot;
 		env.TMPDIR = tempRoot;
 		env.NODE_COMPILE_CACHE = compileCache;
+		// Pipe apps need the same owned Pi state as PTYs. The run owns its
+		// lifetime; explicit per-test agent fixtures remain unchanged.
+		env.PI_CODING_AGENT_DIR ??= nativeFixture?.agentDir ?? createTestAgentDir(tempRoot, process.cwd());
 		delete env.NODE_PATH;
 	}
 	if (nativeFixture !== undefined) {

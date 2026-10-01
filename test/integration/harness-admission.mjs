@@ -1,13 +1,15 @@
 import { generateKeyPairSync, sign } from "node:crypto";
 import { mkdtempSync, rmdirSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
-import { join } from "node:path";
+import { join, relative } from "node:path";
+import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 
 /** Hold a trusted bootstrap until the parent has registered its birth. */
 export function prepareHarnessAdmission(command, args, evidenceDir) {
 	// Darwin limits Unix socket addresses to 104 bytes; private test TMPDIRs exceed that.
-	const directory = mkdtempSync(join(process.platform === "darwin" ? "/private/tmp" : "/tmp", "sumo-admit-"));
+	const sandbox = process.env.SUMOCODE_TEST_SANDBOX === "srt";
+	const directory = mkdtempSync(join(sandbox ? tmpdir() : process.platform === "darwin" ? "/private/tmp" : "/tmp", "sumo-admit-"));
 	const address = join(directory, "socket");
 	const { privateKey, publicKey } = generateKeyPairSync("ed25519");
 	let grant = "";
@@ -21,7 +23,7 @@ export function prepareHarnessAdmission(command, args, evidenceDir) {
 	});
 	server.on("error", () => { server.close(); });
 	writeFileSync(join(evidenceDir, "admission.json"), `${JSON.stringify({ directory })}\n`, { mode: 0o600 });
-	server.listen(address);
+	server.listen(sandbox ? relative(process.cwd(), address) : address);
 	server.unref();
 	return {
 		command: process.execPath,

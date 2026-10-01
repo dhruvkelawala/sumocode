@@ -1,4 +1,6 @@
 import { spawnSync } from "node:child_process";
+import { spawnTestAppSync } from "../../scripts/sandbox/wrap-app.mjs";
+import { processRows } from "../../scripts/preflight-integration.mjs";
 import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -166,7 +168,7 @@ async function waitForExit(session: NativePtySession, timeoutMs = 15_000): Promi
 }
 
 function runNative(args: readonly string[], options: { readonly input?: string; readonly env?: NodeJS.ProcessEnv; readonly cwd?: string } = {}) {
-	return spawnSync(NATIVE_BIN, [...args], {
+	return spawnTestAppSync(NATIVE_BIN, [...args], {
 		cwd: options.cwd ?? tempRoot("sumocode-native-command-"),
 		env: nativeSpawnEnv(options.env),
 		input: options.input ?? "",
@@ -336,7 +338,7 @@ nativeDescribe("native executable contract", () => {
 		expect(readFileSync(NATIVE_PI).includes("bedrock-provider")).toBe(false);
 		expect(readFileSync(join(ROOT, "node_modules/@earendil-works/pi-coding-agent/dist/bun/runtime-setup.js"), "utf8")).toContain("setBedrockProviderModule(bedrockProviderModule)");
 		expect(runNative(["--version"]).stdout).toContain(`sumocode ${PACKAGE_VERSION}`);
-		expect(spawnSync(NATIVE_PI, ["--version"], { env: nativeSpawnEnv(), encoding: "utf8" }).stdout.trim()).toBe("0.99.1");
+		expect(spawnTestAppSync(NATIVE_PI, ["--version"], { env: nativeSpawnEnv(), encoding: "utf8" }).stdout.trim()).toBe("0.99.1");
 	});
 
 	it.runIf(process.platform === "darwin")("ships macOS executables with a valid code signature", () => {
@@ -368,7 +370,7 @@ nativeDescribe("native executable contract", () => {
 		const alias = join(prefix, "bin", "sc");
 		expect(realpathSync(alias)).toBe(realpathSync(installed));
 		for (const binary of [installed, alias]) {
-			const version = spawnSync(binary, ["--version"], { env: nativeSpawnEnv(), encoding: "utf8" });
+			const version = spawnTestAppSync(binary, ["--version"], { env: nativeSpawnEnv(), encoding: "utf8" });
 			expect(version.status).toBe(0);
 			expect(version.stdout).toContain(`sumocode ${PACKAGE_VERSION}`);
 		}
@@ -547,7 +549,8 @@ nativeDescribe("native executable contract", () => {
 		}
 
 		const executable = createExecutable("executable-pi", "#!/bin/sh\nprintf EXECUTABLE_PI\n");
-		expect(runNative(["doctor"], { env: { PI_BIN: executable } }).status).toBe(0);
+		const doctorArgs = process.env.SUMOCODE_TEST_SANDBOX === "srt" ? ["doctor", "--diag-file", join(root, "diag.jsonl")] : ["doctor"];
+		expect(runNative(doctorArgs, { env: { PI_BIN: executable } }).status).toBe(0);
 		expect(runNative(["--no-sumo-tui"], { env: { PI_BIN: executable } }).stdout).toContain("EXECUTABLE_PI");
 	});
 
@@ -973,12 +976,26 @@ nativeDescribe("native executable contract", () => {
 		const root = tempRoot("sumocode-native-rpc-reload-");
 		const state = join(root, "count");
 		const log = join(root, "children.log");
-		const pi = createExecutable("pi-rpc-reload", `#!/bin/bash\ncount=0; [ ! -f ${JSON.stringify(state)} ] || count=$(cat ${JSON.stringify(state)}); count=$((count+1)); printf '%s' "$count" > ${JSON.stringify(state)}; printf '%s %s\\n' "$count" "$PPID" >> ${JSON.stringify(log)}; [ "$count" -lt 3 ] && exit 100; exit 42\n`);
+		const release = join(root, "release");
+		const sandbox = process.env.SUMOCODE_TEST_SANDBOX === "srt";
+		// Hold the first child so the trusted runner can identify its native parent, not srt's PID.
+		const gate = sandbox ? `[ "$count" -ne 1 ] || while [ ! -f ${JSON.stringify(release)} ]; do sleep 0.01; done; ` : "";
+		const pi = createExecutable("pi-rpc-reload", `#!/bin/bash\ncount=0; [ ! -f ${JSON.stringify(state)} ] || count=$(cat ${JSON.stringify(state)}); count=$((count+1)); printf '%s' "$count" > ${JSON.stringify(state)}; printf '%s %s\\n' "$count" "$PPID" >> ${JSON.stringify(log)}; ${gate}[ "$count" -lt 3 ] && exit 100; exit 42\n`);
 		const session = spawnNativePty(["--offline", "--no-extensions", "--no-session", "--approve"], { env: { PI_BIN: pi, TMPDIR: root } });
+		let hostPid = session.pid;
+		if (sandbox) {
+			await waitForNonemptyFile(log, 5_000);
+			hostPid = Number(readFileSync(log, "utf8").trim().split(" ")[1]);
+			const host = processRows().rows.find((row) => row.pid === hostPid);
+			expect(hostPid).not.toBe(session.pid);
+			expect(host?.pgid).toBe(session.pid);
+			expect(host?.command).toContain(NATIVE_BIN);
+			writeFileSync(release, "");
+		}
 		expect((await waitForExit(session, 20_000)).exitCode).not.toBe(0);
 		const parentPids = readFileSync(log, "utf8").trim().split("\n").map((line) => Number(line.split(" ")[1]));
 		expect(parentPids).toHaveLength(3);
-		expect(new Set(parentPids)).toEqual(new Set([session.pid]));
+		expect(new Set(parentPids)).toEqual(new Set([hostPid]));
 		expect(readdirSync(root).filter((name) => name.startsWith("sumocode-exit-code.") || name.startsWith("sumocode-reload-ready."))).toEqual([]);
 	}, 25_000);
 });

@@ -7,7 +7,7 @@ import { preflightRecovery } from "../../scripts/plan112-recovery-preflight.mjs"
 import { systemProcessTree } from "../../src/background-tasks/process-tree.js";
 import { installSubagents } from "../../src/subagents/index.js";
 import { RetainedRuntime } from "../../src/subagents/retained-runtime.js";
-import { createChildEvidenceContext, requireHarnessAuth, spawnSupervisedProcess, supervisePtyProcess } from "./harness-supervisor.js";
+import { createChildEvidenceContext, requireHarnessAuth, spawnSupervisedApp, supervisePtyProcess } from "./harness-supervisor.js";
 import { cleanupOwnedTree, type OwnedTree } from "./fixtures/subagent-feasibility-cleanup.js";
 
 it.each(["running", "settled"] as const)("production installer transfers a %s real child across replacement and delivers once", async (phase) => {
@@ -19,7 +19,7 @@ it.each(["running", "settled"] as const)("production installer transfers a %s re
 	vi.stubEnv("SUMOCODE_STATE_DIR", join(root, "state"));
 	vi.stubEnv("SUMOCODE_CLAUDE_OAUTH_ADAPTER", provider);
 	const retention = new RetainedRuntime({ provenance: () => ({ pi, sumocode: pi }), spawnOwner: (command, args, options) => {
-		const spawned = spawnSupervisedProcess(command, args, options);
+		const spawned = spawnSupervisedApp(command, args, options);
 		return spawned.child;
 	} });
 	const rememberOwned = () => {

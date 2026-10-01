@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { spawn as spawnPty } from "node-pty";
 import { prepareHarnessAdmission } from "./harness-admission.mjs";
+import { wrapTestApp } from "../../scripts/sandbox/wrap-app.mjs";
 import {
 	HARNESS_OWNER_TOKEN_ENV_KEY,
 	HARNESS_RUN_ID_ENV_KEY,
@@ -385,6 +386,13 @@ function harnessGroupRegistration(pid, pgid, env, auth) {
 	};
 }
 
+export function spawnSupervisedApp(command, args, options = {}, ports = []) {
+	if (!process.env.SUMOCODE_TEST_SANDBOX) return spawnSupervisedProcess(command, args, options);
+	requireHarnessAuth(options.env ?? {});
+	const app = wrapTestApp(command, args, { cwd: options.cwd?.toString(), env: options.env, ports });
+	return spawnSupervisedProcess(app.command, app.args, { ...options, env: app.env });
+}
+
 export function spawnSupervisedProcess(command, args, options = {}) {
 	const env = { ...options.env, [HARNESS_SIGNATURE_ENV_KEY]: HARNESS_SIGNATURE };
 	delete env[HARNESS_SIGNING_KEY_ENV_KEY];
@@ -474,11 +482,12 @@ export function spawnSupervisedProcess(command, args, options = {}) {
 	};
 }
 
-export function spawnSupervisedPty(command, args, options, evidence, auth) {
-	const env = { ...options.env, [HARNESS_SIGNATURE_ENV_KEY]: HARNESS_SIGNATURE };
+export function spawnSupervisedPty(command, args, options, evidence, auth, sandboxApp = true) {
+	const app = sandboxApp && process.env.SUMOCODE_TEST_SANDBOX ? wrapTestApp(command, args, options) : { command, args, env: options.env };
+	const env = { ...app.env, [HARNESS_SIGNATURE_ENV_KEY]: HARNESS_SIGNATURE };
 	delete env[HARNESS_SIGNING_KEY_ENV_KEY];
 	delete env[HARNESS_RUN_ID_ENV_KEY];
-	const admission = prepareHarnessAdmission(command, args, evidence.evidenceDir);
+	const admission = prepareHarnessAdmission(app.command, app.args, evidence.evidenceDir);
 	let child;
 	try {
 		child = spawnPty(admission.command, admission.args, { ...options, env });

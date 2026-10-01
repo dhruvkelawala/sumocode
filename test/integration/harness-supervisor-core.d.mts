@@ -55,8 +55,9 @@ export declare function harnessAuditFailures(root: string): HarnessAuditFailure[
 export declare function createChildEvidenceContext(argv: readonly string[], env?: NodeJS.ProcessEnv, diagPath?: string): ChildEvidenceContext;
 export declare function captureTimeoutEvidence(input: TimeoutEvidenceInput): Promise<string>;
 export declare function waitForDiagnosticReadiness(diagPath: string, state: ReadinessState, timeoutMs: number): Promise<DiagnosticReadinessEvent>;
+export declare function spawnSupervisedApp(command: string, args: readonly string[], options?: SpawnOptions, ports?: readonly number[]): SupervisedProcess;
 export declare function spawnSupervisedProcess(command: string, args: readonly string[], options?: SpawnOptions): SupervisedProcess;
-export declare function spawnSupervisedPty(command: string, args: readonly string[], options: IPtyForkOptions, evidence: ChildEvidenceContext, auth: HarnessAuth): {
+export declare function spawnSupervisedPty(command: string, args: readonly string[], options: IPtyForkOptions, evidence: ChildEvidenceContext, auth: HarnessAuth, sandboxApp?: boolean): {
     child: IPty;
     supervision: Pick<SupervisedProcess, "pid" | "pgid" | "evidence" | "terminate" | "captureFailure">;
 };

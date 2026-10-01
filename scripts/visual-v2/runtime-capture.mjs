@@ -5,6 +5,7 @@ import { dirname, resolve } from "node:path";
 import { spawn } from "node-pty";
 import { replayAnsi } from "./ansi-replay.mjs";
 import { repoRoot } from "./paths.mjs";
+import { wrapTestApp } from "../sandbox/wrap-app.mjs";
 
 const DEFAULT_MAX_ATTEMPTS = 2;
 
@@ -55,12 +56,13 @@ async function runOneAttempt(scenario, runtime, attempt) {
 	let firstByteAt = null;
 
 	try {
-		child = spawn(command, args, {
+		const app = wrapTestApp(command, args, { cwd: repoRoot, env: runtimeEnv.env });
+		child = spawn(app.command, app.args, {
 			name: "xterm-256color",
 			cols: dimensions.cols,
 			rows: dimensions.rows,
 			cwd: repoRoot,
-			env: runtimeEnv.env,
+			env: app.env,
 		});
 
 		const startedAt = Date.now();

@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
 import { afterEach, describe, expect, it } from "vitest";
-import { spawnSupervisedProcess, type SupervisedProcess } from "./harness-supervisor.js";
+import { spawnSupervisedApp, type SupervisedProcess } from "./harness-supervisor.js";
 import { buildSpawnEnv } from "./spawn-pi-pty.js";
 
 interface RpcRequest {
@@ -34,7 +34,7 @@ afterEach(async () => {
 });
 
 function launch(extension: string, sessionDir: string, sessionFile: string, evidenceFile: string, agentDir: string): RpcClient {
-	const supervised = spawnSupervisedProcess(process.env.PI_BIN ?? "pi", [
+	const supervised = spawnSupervisedApp(process.env.PI_BIN ?? "pi", [
 		"--mode", "rpc",
 		"--offline",
 		"--approve",

@@ -7,7 +7,7 @@ import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 import { SumoRpcClient } from "../../src/sumo-tui/rpc/client.js";
 import { PINNED_THINKING_LEVELS } from "../../src/sumo-tui/rpc/contract-classification.js";
 import { expectRpcSuccess, responseData } from "../../src/sumo-tui/rpc/response.js";
-import { spawnSupervisedProcess, type SupervisedProcess } from "./harness-supervisor.js";
+import { spawnSupervisedApp, type SupervisedProcess } from "./harness-supervisor.js";
 import { buildSpawnEnv } from "./spawn-pi-pty.js";
 
 /**
@@ -62,7 +62,7 @@ afterEach(async () => {
 });
 
 function createClient(command: string, args: readonly string[], env: NodeJS.ProcessEnv): SumoRpcClient {
-	const supervised = spawnSupervisedProcess(command, args, {
+	const supervised = spawnSupervisedApp(command, args, {
 		cwd: process.cwd(),
 		env,
 		stdio: ["pipe", "pipe", "pipe"],

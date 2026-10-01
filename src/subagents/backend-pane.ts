@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { resolvePsBinary } from "../background-tasks/ps-binary.js";
 import {
 	chmodSync,
 	existsSync,
@@ -810,8 +811,8 @@ function visibleWrapperGate(taskDir: string, nonce: string, bornFile: string, re
 		`[ "\${1-}" = ${shellEscape(nonce)} ] || exit 125`,
 		`__sumo_private() { [ ! -L "$1" ] && [ -O "$1" ] && [ "$(/usr/bin/stat ${statArgs} "$1")" = "$2" ]; }`,
 		`[ -d ${shellEscape(taskDir)} ] && __sumo_private ${shellEscape(taskDir)} 700 || exit 125`,
-		`__sumo_birth=$(/bin/ps -p "$$" -o lstart=) || exit 125`,
-		`__sumo_group=$(/bin/ps -p "$$" -o pgid=) || exit 125`,
+		`__sumo_birth=$(${shellEscape(resolvePsBinary())} -p "$$" -o lstart=) || exit 125`,
+		`__sumo_group=$(${shellEscape(resolvePsBinary())} -p "$$" -o pgid=) || exit 125`,
 		`( umask 077; set -C; printf '%s\\n' "$1" "$$" "$__sumo_group" "$__sumo_birth" > ${shellEscape(bornFile)} ) || exit 125`,
 		`__sumo_released=0`,
 		`for ((__sumo_wait=0; __sumo_wait<300; __sumo_wait++)); do`,

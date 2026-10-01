@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { createInterface } from "node:readline";
 import { afterEach, describe, expect, it } from "vitest";
-import { spawnSupervisedProcess, type SupervisedProcess } from "./harness-supervisor.js";
+import { spawnSupervisedApp, type SupervisedProcess } from "./harness-supervisor.js";
 import { buildSpawnEnv } from "./spawn-pi-pty.js";
 
 interface RpcEntry {
@@ -101,7 +101,7 @@ export default function install(pi) {
 }
 
 function launch(extension: string, fauxProvider: string, hook: string, sessionFile: string, agentDir: string, evidence: string, diagFile?: string): RpcClient {
-	const supervised = spawnSupervisedProcess(join(process.cwd(), "node_modules", ".bin", "pi"), [
+	const supervised = spawnSupervisedApp(join(process.cwd(), "node_modules", ".bin", "pi"), [
 		"--mode", "rpc", "--offline", "--approve", "--no-extensions",
 		"-e", extension,
 		"-e", fauxProvider,

@@ -7,7 +7,7 @@ import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 import { SumoRpcClient } from "../../src/sumo-tui/rpc/client.js";
 import { responseData } from "../../src/sumo-tui/rpc/response.js";
 import { createRpcChildFixture } from "./rpc-child-fixture.js";
-import { spawnSupervisedProcess, type SupervisedProcess } from "./harness-supervisor.js";
+import { spawnSupervisedApp, type SupervisedProcess } from "./harness-supervisor.js";
 import { buildSpawnEnv } from "./spawn-pi-pty.js";
 
 const clients: SumoRpcClient[] = [];
@@ -41,7 +41,7 @@ export default function install(pi) {
 }
 
 function clientFor(command: string, args: readonly string[], env = buildSpawnEnv(process.env, undefined)): SumoRpcClient {
-	const supervised = spawnSupervisedProcess(command, args, { cwd: process.cwd(), env, stdio: ["pipe", "pipe", "pipe"] });
+	const supervised = spawnSupervisedApp(command, args, { cwd: process.cwd(), env, stdio: ["pipe", "pipe", "pipe"] });
 	children.push(supervised);
 	// SAFETY: supervised process was spawned with all three stdio channels fixed to pipes.
 	const child = supervised.child as ChildProcessWithoutNullStreams;

@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { lstatSync, realpathSync } from "node:fs";
 import { basename, isAbsolute } from "node:path";
 import type { ProcessTreeMemberAnchor } from "../background-tasks/process-tree.js";
+import { resolvePsBinary } from "../background-tasks/ps-binary.js";
 import { isRecord } from "./task-params.js";
 
 // oxlint-disable anti-slop/no-unknown-parameters, anti-slop/no-runtime-typeof -- IPC boundary parser: anchor messages are untrusted process payloads validated before callbacks.
@@ -37,7 +38,7 @@ export class RetainedAnchor {
 		}
 		// The census parses physical ps output lines. Keep the trusted anchor program on one argv line so a live anchor cannot blind census.
 		// Newlines become statement separators; never add // line comments to ANCHOR_PROGRAM.
-		const program = ANCHOR_PROGRAM.replace(/\r?\n/g, ";");
+		const program = `const psBinary = ${JSON.stringify(resolvePsBinary(options.env))};${ANCHOR_PROGRAM.replace(/\r?\n/g, ";")}`;
 		if (program.includes("\n") || program.includes("\r")) throw new Error("retained anchor program must remain argv-safe");
 		// SAFETY: the three inherited Pi streams are pipes; fd 3 is anchor-only IPC.
 		this.proc = spawnImpl(node, ["-e", program, `sumocode-retained-anchor:${options.nonce ?? randomUUID()}`], {
@@ -107,7 +108,7 @@ process.once("message", ({ binary, args }) => {
 		child.once("error", () => send({ kind: "failed" }));
 		child.once("spawn", () => {
 			try {
-				const birth = execFileSync("/bin/ps", ["-p", String(child.pid), "-o", "lstart="], { encoding: "utf8" }).trim();
+				const birth = execFileSync(psBinary, ["-p", String(child.pid), "-o", "lstart="], { encoding: "utf8" }).trim();
 				if (!birth || child.exitCode !== null || child.signalCode !== null) throw new Error();
 				for (const fd of [0, 1, 2]) closeSync(fd);
 				send({ kind: "started", child: { pid: child.pid, processStartTime: birth } });

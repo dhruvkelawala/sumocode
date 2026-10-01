@@ -2,7 +2,12 @@ const net = require("node:net");
 const { verify } = require("node:crypto");
 
 // Do not execute the workload until its parent has durably registered this PID.
-const connection = net.createConnection(process.argv[2]);
+const path = require("node:path");
+const cwd = process.cwd();
+// Relative AF_UNIX addresses fit Darwin's limit even in a long worktree path.
+process.chdir(path.dirname(process.argv[2]));
+const connection = net.createConnection(path.basename(process.argv[2]));
+connection.once("connect", () => process.chdir(cwd));
 let grant = "";
 connection.setEncoding("utf8");
 connection.on("data", (chunk) => {

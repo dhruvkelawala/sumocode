@@ -10,7 +10,7 @@ import { systemProcessTree, type ProcessTreeIdentity, type ProcessTreeVerificati
 import { cleanupOwnedTree, type OwnedTree } from "./fixtures/terminal-recovery-boundaries.js";
 import { isTerminalTaskSettled, type TerminalTaskSnapshot } from "../../src/background-tasks/task-types.js";
 import { TerminalDeliveryCoordinator } from "../../src/background-tasks/terminal-tools.js";
-import { spawnSupervisedProcess, type SupervisedProcess } from "./harness-supervisor.js";
+import { spawnSupervisedApp, type SupervisedProcess } from "./harness-supervisor.js";
 import { buildSpawnEnv } from "./spawn-pi-pty.js";
 
 type JsonValue = string | number | boolean | null | undefined | readonly JsonValue[] | { readonly [key: string]: JsonValue };
@@ -120,7 +120,7 @@ function launch(paths: TestRoot, sessionFile: string, overrides: NodeJS.ProcessE
 		...overrides,
 		SUMOCODE_TEST_TERMINAL_EXPECTED_CRASH_TOKEN: expectedCrashToken,
 	});
-	const supervised = spawnSupervisedProcess(process.env.PI_BIN ?? "pi", [
+	const supervised = spawnSupervisedApp(process.env.PI_BIN ?? "pi", [
 		"--mode", "rpc",
 		"--offline",
 		"--approve",

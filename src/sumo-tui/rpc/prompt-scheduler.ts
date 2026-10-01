@@ -128,26 +128,26 @@ class DefaultRpcPromptScheduler implements RpcPromptScheduler {
 		if (await this.options.handleHostCommand?.(message)) return "handled";
 		const compacting = this.options.getCompacting?.() === true;
 		const command = message.trimStart().startsWith("/");
-		const busy = this.isBusy();
+		// Only a busy, non-command submission has a delivery worth judging; any other `auto` steers.
+		const judge = options.delivery === "auto" && !command && this.isBusy();
+		const fixed: RpcPromptDeliveryMode = options.delivery === "auto" ? "steer" : options.delivery;
 		if (compacting && command) {
-			void this.dispatch({ text: message, delivery: options.delivery === "auto" ? "steer" : options.delivery }, this.generation, false);
+			void this.dispatch({ text: message, delivery: fixed }, this.generation, false);
 			return "sent";
 		}
 		if (containsQueuedAttachment(message) && (compacting || this.options.getBusy?.() === true)) {
 			this.options.onPreflightRejected?.(message, new RpcPromptPreflightRejection("attachments cannot be queued safely"));
 			return "ignored";
 		}
-		// Only a busy, non-command submission has a delivery worth judging.
-		const delivery = options.delivery === "auto" && (!busy || command) ? "steer" : options.delivery;
 		// `auto` waits in the local queue while Jev decides, so later submissions keep their order.
-		if (compacting || this.queue.length > 0 || delivery === "auto") {
-			this.queue.push({ text: message, delivery });
+		if (compacting || this.queue.length > 0 || judge) {
+			this.queue.push({ text: message, delivery: judge ? "auto" : fixed });
 			this.pausedAfterFailure = false;
 			this.publishQueue();
 			void this.flush(this.generation);
 			return "queued";
 		}
-		void this.dispatch({ text: message, delivery }, this.generation, false);
+		void this.dispatch({ text: message, delivery: fixed }, this.generation, false);
 		return "sent";
 	}
 
@@ -257,8 +257,9 @@ class DefaultRpcPromptScheduler implements RpcPromptScheduler {
 		this.options.onDispatchStart?.(entry.text);
 		try {
 			const disposition = await this.options.sendPrompt(entry.text, { streamingBehavior: entry.delivery });
-			// An input hook that handled the prompt started no run: no agent_start will clear the latch.
-			if (disposition === "handled") this.awaitingRunStart = false;
+			// Only a started prompt brings an agent_start; for any other disposition (an input hook
+			// handled it, or Pi had already queued it) nothing else would clear the latch.
+			if (disposition !== undefined && disposition !== "started") this.awaitingRunStart = false;
 			return generation === this.generation;
 		} catch (error) {
 			// A failed send started no run, or its agent_start will say otherwise.

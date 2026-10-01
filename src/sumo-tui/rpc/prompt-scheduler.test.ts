@@ -365,10 +365,16 @@ describe("RpcPromptScheduler auto delivery", () => {
 	});
 
 	it("stops counting a run as starting when Pi reports an input hook handled the prompt", async () => {
-		const scheduler = createRpcPromptScheduler({ getBusy: () => false, sendPrompt: async () => "handled" });
-		await scheduler.submit("handled by an extension", { delivery: "auto" });
+		for (const disposition of ["handled", "queued", "some-future-disposition"]) {
+			const scheduler = createRpcPromptScheduler({ getBusy: () => false, sendPrompt: async () => disposition });
+			await scheduler.submit("handled by an extension", { delivery: "auto" });
+			await flush();
+			expect(scheduler.getSnapshot().busy).toBe(false);
+		}
+		const started = createRpcPromptScheduler({ getBusy: () => false, sendPrompt: async () => "started" });
+		await started.submit("a real run", { delivery: "auto" });
 		await flush();
-		expect(scheduler.getSnapshot().busy).toBe(false);
+		expect(started.getSnapshot().busy).toBe(true);
 	});
 
 	it("leaves the task unknown when the run opens with an image and no text", async () => {

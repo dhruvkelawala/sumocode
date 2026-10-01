@@ -106,12 +106,10 @@ export function createRpcPromptScheduler(options: RpcPromptSchedulerOptions): Rp
 class DefaultRpcPromptScheduler implements RpcPromptScheduler {
 	private queue: LocalQueuedPrompt[] = [];
 	private sessionId: string | undefined;
-	/** What the agent is working on: context for `auto` delivery. */
+	/** The user message that started the current run: context for `auto` delivery. */
 	private currentTask: string | undefined;
 	/** Pi's next user message opens the run that just started: it becomes the task. */
 	private runTaskPending = false;
-	/** Follow-ups sent to Pi and not yet started; each becomes the task when Pi starts it. */
-	private pendingFollowUps: string[] = [];
 	private generation = 0;
 	private lifecycleBusy = false;
 	/** An idle prompt was sent and Pi's `agent_start` for it has not arrived yet. */
@@ -130,7 +128,6 @@ class DefaultRpcPromptScheduler implements RpcPromptScheduler {
 		const compacting = this.options.getCompacting?.() === true;
 		const command = message.trimStart().startsWith("/");
 		const busy = this.isBusy();
-		if (!busy) this.currentTask = message;
 		if (compacting && command) {
 			void this.dispatch({ text: message, delivery: options.delivery === "auto" ? "steer" : options.delivery }, this.generation, false);
 			return "sent";
@@ -149,9 +146,6 @@ class DefaultRpcPromptScheduler implements RpcPromptScheduler {
 			void this.flush(this.generation);
 			return "queued";
 		}
-		// The UI paints the run as started on dispatch; count it busy from here too, so an
-		// `auto` message typed before Pi's agent_start arrives is still judged.
-		if (!busy && !command) this.awaitingRunStart = true;
 		void this.dispatch({ text: message, delivery }, this.generation, false);
 		return "sent";
 	}
@@ -162,11 +156,18 @@ class DefaultRpcPromptScheduler implements RpcPromptScheduler {
 			this.lifecycleBusy = true;
 			this.runTaskPending = true;
 		}
-		if (event.type === "message_start") this.trackTask(userMessageText(event.message));
+		if (event.type === "message_start" && this.runTaskPending) {
+			// Pi emits the run's prompt (after skill and template expansion) right after agent_start;
+			// follow-ups continue the same run, and a run that restarts emits agent_start again.
+			const task = userMessageText(event.message);
+			if (task !== undefined) {
+				this.currentTask = task;
+				this.runTaskPending = false;
+			}
+		}
 		if (event.type === "agent_settled") {
 			this.lifecycleBusy = false;
 			this.runTaskPending = false;
-			this.pendingFollowUps = [];
 			void this.flush(this.generation);
 		}
 		if (event.type === "compaction_end") void this.flush(this.generation);
@@ -175,7 +176,6 @@ class DefaultRpcPromptScheduler implements RpcPromptScheduler {
 	public restoreAll(currentDraft: string): RpcPromptRestoreResult {
 		const restored = this.queue.map((entry) => entry.text);
 		this.queue = [];
-		this.pendingFollowUps = [];
 		this.pausedAfterFailure = false;
 		this.generation += 1;
 		this.publishQueue();
@@ -232,19 +232,6 @@ class DefaultRpcPromptScheduler implements RpcPromptScheduler {
 		if (generation !== this.generation && this.queue.length > 0) void this.flush(this.generation);
 	}
 
-	private trackTask(text: string | undefined): void {
-		if (text === undefined) return;
-		if (this.runTaskPending) {
-			this.runTaskPending = false;
-			this.currentTask = text;
-			return;
-		}
-		const started = this.pendingFollowUps.indexOf(text);
-		if (started < 0) return;
-		this.currentTask = text;
-		this.pendingFollowUps.splice(0, started + 1);
-	}
-
 	private isBusy(): boolean {
 		return this.lifecycleBusy || this.awaitingRunStart || this.options.getBusy?.() === true;
 	}
@@ -257,11 +244,16 @@ class DefaultRpcPromptScheduler implements RpcPromptScheduler {
 
 	private async dispatch(entry: DispatchedPrompt, generation: number, restoreOnFailure: boolean): Promise<boolean> {
 		if (generation !== this.generation) return false;
+		if (!this.isBusy()) {
+			// This send starts a run. The UI paints it as started now, so count it busy and make it
+			// the task before Pi's agent_start arrives: a message typed in between is still judged.
+			this.currentTask = entry.text;
+			if (!entry.text.trimStart().startsWith("/")) this.awaitingRunStart = true;
+		}
 		this.dispatchCount += 1;
 		this.options.onDispatchStart?.(entry.text);
 		try {
 			await this.options.sendPrompt(entry.text, { streamingBehavior: entry.delivery });
-			if (entry.delivery === "followUp") this.pendingFollowUps.push(entry.text);
 			return generation === this.generation;
 		} catch (error) {
 			// A failed send started no run, or its agent_start will say otherwise.

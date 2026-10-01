@@ -80,5 +80,5 @@ function isTypesafeChoiceBody(body: unknown): body is TypesafeChoiceBody {
 	const answer = answers.answer;
 	return typeof answer === "object" && answer !== null
 		&& "choice" in answer && typeof answer.choice === "string"
-		&& "confidence" in answer && typeof answer.confidence === "number" && Number.isFinite(answer.confidence);
+		&& "confidence" in answer && typeof answer.confidence === "number" && answer.confidence >= 0 && answer.confidence <= 1;
 }

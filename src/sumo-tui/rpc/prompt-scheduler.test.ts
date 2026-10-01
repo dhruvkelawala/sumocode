@@ -283,30 +283,55 @@ describe("RpcPromptScheduler auto delivery", () => {
 		expect(scheduler.getSnapshot().queuedMessages).toEqual([]);
 	});
 
-	it("judges against what the agent is working on: the run's first user message, then each follow-up Pi starts", async () => {
-		const decideDelivery = vi.fn(async (): Promise<RpcPromptDeliveryMode> => "followUp");
+	it("judges against the prompt that started the run, as Pi reports it, including runs it never sent", async () => {
+		const decideDelivery = vi.fn(async (): Promise<RpcPromptDeliveryMode> => "steer");
 		const scheduler = createRpcPromptScheduler({ getBusy: () => true, decideDelivery, sendPrompt: async () => undefined });
 		const userMessage = (text: string) => ({ type: "message_start", message: { role: "user", content: [{ type: "text", text }, { type: "image" }] } });
+		const judge = async (message: string): Promise<void> => {
+			await scheduler.submit(message, { delivery: "auto" });
+			await flush();
+			await flush();
+		};
 
-		// A run the scheduler never sent (an image draft or an extension) still names its task.
+		// An image draft or an extension started this run, not the scheduler.
 		scheduler.handleAgentEvent({ type: "agent_start" });
 		scheduler.handleAgentEvent(userMessage("inspect [Image 1]"));
-		await scheduler.submit("after that, open a PR", { delivery: "auto" });
-		await flush();
-		await flush();
+		await judge("after that, open a PR");
 		expect(decideDelivery).toHaveBeenLastCalledWith("after that, open a PR", "inspect [Image 1]");
 
-		// A steer is not a new task; the follow-up becomes the task once Pi starts it.
+		// Steers and follow-ups inside the run do not replace its task.
 		scheduler.handleAgentEvent(userMessage("use a Map"));
-		await scheduler.submit("and add a test", { delivery: "auto" });
-		await flush();
-		await flush();
+		await judge("and add a test");
 		expect(decideDelivery).toHaveBeenLastCalledWith("and add a test", "inspect [Image 1]");
-		scheduler.handleAgentEvent(userMessage("after that, open a PR"));
-		await scheduler.submit("use the gh CLI", { delivery: "auto" });
+
+		// A run that restarts names its own prompt.
+		scheduler.handleAgentEvent({ type: "agent_settled" });
+		scheduler.handleAgentEvent({ type: "agent_start" });
+		scheduler.handleAgentEvent(userMessage("<skill name=\"tdd\">…</skill> fix the parser"));
+		await judge("use vitest");
+		expect(decideDelivery).toHaveBeenLastCalledWith("use vitest", "<skill name=\"tdd\">…</skill> fix the parser");
+	});
+
+	it("counts a queued message that starts a run as busy before Pi's agent_start", async () => {
+		let busy = true;
+		const first = deferredDelivery();
+		const decideDelivery = vi.fn().mockReturnValueOnce(first.promise).mockResolvedValue("followUp");
+		const sendPrompt = vi.fn(async () => undefined);
+		const scheduler = createRpcPromptScheduler({ getBusy: () => busy, decideDelivery, sendPrompt });
+
+		await scheduler.submit("B", { delivery: "auto" });
+		// Run A ends while Jev judges B, so B is sent to an idle agent and starts the next run.
+		busy = false;
+		scheduler.handleAgentEvent({ type: "agent_settled" });
+		first.resolve("steer");
 		await flush();
 		await flush();
-		expect(decideDelivery).toHaveBeenLastCalledWith("use the gh CLI", "after that, open a PR");
+		await scheduler.submit("after that, C", { delivery: "auto" });
+		await flush();
+		await flush();
+
+		expect(decideDelivery).toHaveBeenLastCalledWith("after that, C", "B");
+		expect(sendPrompt.mock.calls.at(-1)).toEqual(["after that, C", { streamingBehavior: "followUp" }]);
 	});
 
 	it("steers when the decider rejects", async () => {

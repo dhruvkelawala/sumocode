@@ -1,0 +1,12 @@
+{
+	"extends": "./tsconfig.json",
+	"compilerOptions": {
+		"types": ["node"],
+		"incremental": false
+	},
+	"files": [
+		"test/integration/harness-admission.ts",
+		"test/integration/harness-supervisor.ts"
+	],
+	"include": []
+}

@@ -1158,6 +1158,28 @@ describe("canonical census hardening", () => {
 			registrationHmac: signSpawnRegistration(tuple, runId, auth.signingKey) };
 	}
 
+	it.each(["space", "tab", "newline-space", "spawn-space", "empty", "complete blank lines"])(
+		"does not forgive unterminated whitespace in the public census or audit: %s", async (kind) => {
+			const manifest = join(createRunRoot(), "children.jsonl");
+			const signed = kind === "spawn-space";
+			const complete = kind === "empty" || kind === "complete blank lines";
+			writeFileSync(manifest, signed ? `${JSON.stringify(spawnEvent())}\n `
+				: kind === "tab" ? "\t" : kind === "newline-space" ? "\n "
+					: kind === "empty" ? "" : kind === "complete blank lines" ? " \n\t\n\n" : " ");
+			const census = await manifestProcessGroups(manifest, ownerToken, auth);
+			expect(census.groups.map((group) => group.pid)).toEqual(signed ? [60_001] : []);
+			if (complete) expect(census.failures).toEqual([]);
+			else expect(census.failures).toContainEqual(expect.stringContaining("manifest torn line"));
+			const signals: Array<[number, string]> = [];
+			let scans = 0;
+			await expect(auditAndReap(manifest, ownerToken, auth, {
+				readProcessTable: () => { scans++; return { rows: [] }; }, readProcessStart: () => undefined, currentPgid: 99_999,
+				kill: (pid, signal) => { signals.push([pid, String(signal)]); return true; }, wait: async () => {},
+			})).resolves.toBe(complete);
+			expect(signals).toEqual([]);
+			expect(scans).toBe(signed ? 1 : 0);
+		});
+
 	it.each(["missing", "directory", "symlink"])("names %s census read loss without leaking contents", async (kind) => {
 		const root = createRunRoot();
 		const manifest = join(root, "children.jsonl");
@@ -1316,6 +1338,75 @@ describe("canonical preflight read loss", () => {
 	const owner = { pid: deadPid, runId: "postmortem-run", ownerToken: "postmortem-owner" };
 	const spawn = { event: "spawn", pid: 60_001, pgid: 60_001, processStart: "leader-start",
 		ownerPid: 59_001, ownerProcessStart: "worker-start", runId: owner.runId, registrationHmac: "a".repeat(64) };
+
+	it.each(["valid then null", "null then valid", "malformed", "torn", "foreign", "conflict", "exact duplicate", "wellformed"])(
+		"retains every human-only exclusion through inspect and fix: %s", async (kind) => {
+			const root = createRunRoot();
+			mkdirSync(join(root, "node_modules"));
+			const namespace = join(root, "sumocode-harness-v2-run-partial-manual");
+			mkdirSync(namespace);
+			writeFileSync(join(namespace, "owner.json"), JSON.stringify(owner));
+			const second = { ...spawn, pid: 60_002, pgid: 60_001, processStart: "second-start" };
+			const independent = { ...spawn, pid: 61_001, pgid: 61_001, processStart: "independent-start" };
+			const valid = `${JSON.stringify(spawn)}\n`;
+			const later = `${JSON.stringify(independent)}\n`;
+			const bad = kind === "foreign" ? `${JSON.stringify({ ...spawn, runId: "foreign" })}\n`
+				: kind === "malformed" ? "private-parse-secret\n" : "null\n";
+			writeFileSync(join(namespace, "children.jsonl"), kind === "null then valid" ? bad + valid + later
+				: kind === "torn" ? valid + later + "{\"event\":"
+					: kind === "conflict" ? valid + `${JSON.stringify(second)}\n` + later + valid
+						: kind === "exact duplicate" ? valid + valid + later
+							: kind === "wellformed" ? valid + later : valid + bad + later);
+			const command = `${HARNESS_SIGNATURE_ENV_KEY}=${HARNESS_SIGNATURE} node survivor`;
+			const rows = [
+				{ pid: spawn.pid, ppid: 1, pgid: spawn.pgid, start: spawn.processStart, command },
+				{ pid: independent.pid, ppid: 1, pgid: independent.pgid, start: independent.processStart, command },
+				...(kind === "conflict" ? [{ pid: second.pid, ppid: 1, pgid: second.pgid, start: second.processStart, command }] : []),
+			];
+			const report = await inspectIntegrationPreflight({ root, tempRoot: root, rows, env: {} });
+			const expectedPids = kind === "conflict" ? [60_001, 60_002, 61_001] : [60_001, 61_001];
+			expect(report.issues.find((issue) => issue.code === "orphan-harness-children")?.registeredSurvivors
+				.map((group) => group.pid).sort((a, b) => a - b)).toEqual(expectedPids);
+			const unknown = !["wellformed", "exact duplicate"].includes(kind);
+			expect(report.issues.some((issue) => issue.code === "harness-census-unverified")).toBe(unknown);
+			expect(JSON.stringify(report)).not.toContain("private-parse-secret");
+			const signals: Array<[number, string]> = [];
+			const result = await fixIntegrationPreflight(report, { table: { rows }, rows, readRows: () => rows, currentPgid: 99_999,
+				kill: (pid, signal) => { signals.push([pid, String(signal)]); return true; }, wait: async () => {},
+			});
+			expect(signals).toEqual([]);
+			if (unknown) {
+				expect(result).toMatchObject({ refused: true, issues: [expect.objectContaining({ code: "harness-census-unverified" })] });
+				expect(existsSync(namespace)).toBe(true);
+			}
+		});
+
+	it.each(["wellformed", "unknown"])("protects a %s manual survivor from sibling group signals while cleaning an independent group", async (kind) => {
+		const root = createRunRoot();
+		mkdirSync(join(root, "node_modules"));
+		const namespace = join(root, "sumocode-harness-v2-run-manual-sibling");
+		mkdirSync(namespace);
+		writeFileSync(join(namespace, "owner.json"), JSON.stringify(owner));
+		writeFileSync(join(namespace, "children.jsonl"), `${JSON.stringify(spawn)}\n${kind === "unknown" ? "null\n" : ""}`);
+		const command = `${HARNESS_SIGNATURE_ENV_KEY}=${HARNESS_SIGNATURE} node orphan`;
+		const manual = { pid: 60_001, ppid: 1, pgid: 60_001, start: "leader-start", command };
+		const sibling = { pid: 60_002, ppid: manual.pid, pgid: manual.pgid, start: "sibling-start", command };
+		const independent = { pid: 62_001, ppid: 1, pgid: 62_001, start: "independent-start", command };
+		const rows = [manual, sibling, independent];
+		const report = await inspectIntegrationPreflight({ root, tempRoot: root, rows, env: {} });
+		const signals: Array<[number, string]> = [];
+		let scans = 0;
+		const result = await fixIntegrationPreflight(report, { table: { rows }, rows, readRows: () => ++scans === 1 ? rows : [manual],
+			currentPgid: 99_999, kill: (pid, signal) => { signals.push([pid, String(signal)]); return true; }, wait: async () => {},
+		});
+		expect(signals.filter(([pid]) => pid === manual.pid || pid === -manual.pgid)).toEqual([]);
+		expect(signals).toContainEqual([-independent.pgid, "SIGTERM"]);
+		expect(signals).toContainEqual([-independent.pgid, "SIGKILL"]);
+		if (kind === "unknown") {
+			expect(result).toMatchObject({ refused: true, issues: [expect.objectContaining({ code: "harness-census-unverified" })] });
+			expect(existsSync(namespace)).toBe(true);
+		}
+	});
 
 	it.each(["file", "missing"])("names %s required root read loss", async (kind) => {
 		const root = createRunRoot();

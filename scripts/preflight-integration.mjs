@@ -207,7 +207,7 @@ async function classifyHarnessDir(path, rowsByPid = new Map(), tokenIdentityAvai
 		return unverifiedHarnessDir(path, "harness-owner-unverified", "owner lacks the concrete writer's required identity");
 	}
 	const census = await deadRunSpawnRegistrations(path, owner, focused || (!currentShared && owner?.runId === undefined));
-	if (census.issue) return unverifiedHarnessDir(path, "harness-census-unverified", census.issue);
+	if (census.issue) return { ...unverifiedHarnessDir(path, "harness-census-unverified", census.issue), registrations: census.registrations };
 	if (owner !== undefined && pidIsAlive(owner.pid)) {
 		if (owner.ownerToken !== undefined) {
 			if (!tokenIdentityAvailable) return { classification: "live", owner };
@@ -289,30 +289,36 @@ async function deadRunSpawnRegistrations(path, owner, allowAbsent) {
 	// PID-only legacy owners are supported only when no census/modern authority exists.
 	if (owner?.runId === undefined) return { issue: "present census lacks owner run identity" };
 	let contents;
+	let issue;
 	try {
 		contents = await readFile(manifest, { encoding: "utf8", flag: constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK });
 		const after = await lstat(manifest);
 		if (!after.isFile() || [before.dev, before.ino, before.size, before.mtimeMs, before.ctimeMs].join(":")
-			!== [after.dev, after.ino, after.size, after.mtimeMs, after.ctimeMs].join(":")) return { issue: "census changed during read" };
+			!== [after.dev, after.ino, after.size, after.mtimeMs, after.ctimeMs].join(":")) issue = "census changed during read";
 	} catch {
-		return { issue: "census read unavailable or lost" };
+		issue = "census read unavailable or lost";
 	}
-	if (contents.length > 0 && !contents.endsWith("\n")) return { issue: "torn census line" };
+	if (contents === undefined) return { issue };
+	if (contents.length > 0 && !contents.endsWith("\n")) issue ??= "torn census line";
 	const registrations = [];
-	const tuplesByPgid = new Map();
+	const tuples = new Set();
+	const pgids = new Set();
+	// Readable identities remain human-only exclusions even when other bytes or
+	// later metadata are unknown; uncertainty never promotes them to authority.
 	for (const line of contents.split("\n")) {
 		if (!line.trim()) continue;
 		let event;
-		try { event = JSON.parse(line); } catch { return { issue: "malformed census line" }; }
-		if (!deadManifestEventIsValid(event, owner.runId)) return { issue: "invalid or foreign census event" };
+		try { event = JSON.parse(line); } catch { issue ??= "malformed census line"; continue; }
+		if (!deadManifestEventIsValid(event, owner.runId)) { issue ??= "invalid or foreign census event"; continue; }
 		if (event.event !== "spawn") continue;
 		const tuple = JSON.stringify([event.pid, event.pgid, event.processStart, event.ownerPid, event.ownerProcessStart, event.runId, event.registrationHmac]);
-		const previous = tuplesByPgid.get(event.pgid);
-		if (previous !== undefined && previous !== tuple) return { issue: "conflicting census registrations" };
-		if (previous === undefined) registrations.push({ pid: event.pid, pgid: event.pgid, processStart: event.processStart });
-		tuplesByPgid.set(event.pgid, tuple);
+		if (tuples.has(tuple)) continue;
+		if (pgids.has(event.pgid)) issue ??= "conflicting census registrations";
+		registrations.push({ pid: event.pid, pgid: event.pgid, processStart: event.processStart });
+		tuples.add(tuple);
+		pgids.add(event.pgid);
 	}
-	return { registrations };
+	return { registrations, issue };
 }
 
 function registrationMatchesRow(registration, row) {
@@ -686,7 +692,12 @@ export async function fixIntegrationPreflight(report, {
 	const rowsByPid = new Map(rows.map((row) => [row.pid, row]));
 	const liveHarnessPids = new Set(report.liveHarnessPids ?? []);
 	// Never auto-signal a dead run's registered survivors: their record is same-user writable.
-	const registeredSurvivorPids = new Set((orphanIssue?.registeredSurvivors ?? []).map((group) => group.pid));
+	const registeredSurvivors = orphanIssue?.registeredSurvivors ?? [];
+	const registeredSurvivorPids = new Set(registeredSurvivors.map((group) => group.pid));
+	const registeredSurvivorGroups = new Set([
+		...registeredSurvivors.map((group) => group.pgid),
+		...rows.filter((row) => registeredSurvivorPids.has(row.pid)).map((row) => row.pgid),
+	]);
 	const fixableRows = [];
 	for (const reportedRow of orphanIssue?.rows ?? []) {
 		const row = rowsByPid.get(reportedRow.pid);
@@ -695,7 +706,8 @@ export async function fixIntegrationPreflight(report, {
 	}
 	const harnessOwnedGroups = new Set(fixableRows
 		.map((row) => row.pgid)
-		.filter((pgid) => groupIsHarnessOwned(pgid, rows, currentPgid)));
+		// A signed sibling must not turn a human-only exclusion into a group signal.
+		.filter((pgid) => !registeredSurvivorGroups.has(pgid) && groupIsHarnessOwned(pgid, rows, currentPgid)));
 	const individuallySignaled = new Map(fixableRows
 		.filter((row) => !harnessOwnedGroups.has(row.pgid))
 		.map((row) => [row.pid, row]));
@@ -705,7 +717,8 @@ export async function fixIntegrationPreflight(report, {
 	let latestRows = readRows();
 	let escalated = false;
 	for (const pgid of harnessOwnedGroups) {
-		if (survivingGroupIsHarnessOwned(pgid, latestRows, currentPgid)) {
+		if (!latestRows.some((row) => row.pgid === pgid && registeredSurvivorPids.has(row.pid))
+			&& survivingGroupIsHarnessOwned(pgid, latestRows, currentPgid)) {
 			sendSignal(kill, -pgid, "SIGKILL");
 			escalated = true;
 		}

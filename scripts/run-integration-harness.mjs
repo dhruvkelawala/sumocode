@@ -17,7 +17,7 @@ import {
 } from "./lib/integration-harness-constants.mjs";
 
 const ROOT = resolve(fileURLToPath(new URL("..", import.meta.url)));
-const RUNNER_TERM_GRACE_MS = 750;
+const RUNNER_TERM_GRACE_MS = 1_000;
 const AUDIT_FAILURES_FILE = "audit-failures.jsonl";
 
 /** Validate before owner re-exec or preflight; unknown argv must never select the full lane. */
@@ -157,8 +157,8 @@ async function manifestSnapshot(manifest, ownerToken, { runId, signingKey }) {
 	const lines = contents.split("\n");
 	for (let index = 0; index < lines.length; index++) {
 		const line = lines[index];
+		if (index === lines.length - 1 && line.length > 0) snapshot.failures.push(`manifest torn line ${index + 1}`);
 		if (!line.trim()) continue;
-		if (index === lines.length - 1) snapshot.failures.push(`manifest torn line ${index + 1}`);
 		let event;
 		try { event = JSON.parse(line); } catch {
 			snapshot.failures.push(`manifest malformed line ${index + 1}`);

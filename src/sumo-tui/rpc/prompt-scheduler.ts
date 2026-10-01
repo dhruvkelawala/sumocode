@@ -47,12 +47,12 @@ export interface RpcSchedulerEvent {
 }
 
 /** The part of a Pi message the scheduler reads: which user message opened a turn. */
-export interface RpcSchedulerMessage {
+interface RpcSchedulerMessage {
 	readonly role?: string;
 	readonly content?: string | RpcSchedulerContentBlock[];
 }
 
-export interface RpcSchedulerContentBlock {
+interface RpcSchedulerContentBlock {
 	readonly type?: string;
 	readonly text?: string;
 }

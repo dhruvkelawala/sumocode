@@ -5,7 +5,7 @@
  */
 
 /** TypeSafe's API root; its SDKs read an override from `TYPESAFE_BASE_URL`. */
-export const TYPESAFE_DEFAULT_BASE_URL = "https://api.typesafe.ai";
+const TYPESAFE_DEFAULT_BASE_URL = "https://api.typesafe.ai";
 const DEFAULT_TIMEOUT_MS = 600;
 
 /** Named text fields the classifier reads; questions reference them as `field`. */

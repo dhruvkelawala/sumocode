@@ -4,7 +4,7 @@
  * behavior. The native entry suite consumes the same tables so a contract
  * change forces both launchers to move together.
  */
-import { execFileSync } from "node:child_process";
+import { execTestAppSync as execFileSync, wrapTestApp } from "../../scripts/sandbox/wrap-app.mjs";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
@@ -51,12 +51,13 @@ function ptyDryRun(args: readonly string[]): Promise<DryRunObservation> {
 	return new Promise<DryRunObservation>((resolveRun) => {
 		const launcherArgs = ["--dry-run", ...args];
 		const childEnv = buildSpawnEnv(process.env, { PI_BIN: STUB_PI });
-		const child = spawn(LAUNCHER, launcherArgs, {
+		const app = wrapTestApp(LAUNCHER, launcherArgs, { env: childEnv });
+		const child = spawn(app.command, app.args, {
 			name: "xterm-256color",
 			cols: 80,
 			rows: 24,
 			cwd: process.cwd(),
-			env: childEnv,
+			env: app.env,
 		});
 		let output = "";
 		child.onData((data) => {

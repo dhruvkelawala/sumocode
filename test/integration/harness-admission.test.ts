@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, relative } from "node:path";
 import { createServer } from "node:net";
 import { once } from "node:events";
 import { prepareHarnessAdmission } from "./harness-admission.js";
@@ -27,7 +27,7 @@ it("rejects an unsigned grant from a substituted admission endpoint", async () =
 		connection.end("go");
 	});
 	try {
-		forged.listen(forgedAddress);
+		forged.listen(process.env.SUMOCODE_TEST_SANDBOX === "srt" ? relative(process.cwd(), forgedAddress) : forgedAddress);
 		await once(forged, "listening");
 		const bootstrapArgs = [...admission.args];
 		bootstrapArgs[1] = forgedAddress;
@@ -59,7 +59,7 @@ it.each(["pipe", "pty"] as const)("refuses %s workload execution and exits its b
 
 	expect(() => {
 		if (backend === "pipe") spawnSupervisedProcess(process.execPath, args, { env, stdio: "ignore" });
-		else spawnSupervisedPty(process.execPath, args, { env, cwd: root, cols: 80, rows: 24 }, evidence, auth);
+		else spawnSupervisedPty(process.execPath, args, { env, cwd: root, cols: 80, rows: 24 }, evidence, auth, false);
 	}).toThrow(/spawn registration failed/);
 
 	const failures = harnessAuditFailures(root);

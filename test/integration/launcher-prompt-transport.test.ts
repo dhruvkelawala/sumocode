@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { spawnTestAppSync as spawnSync } from "../../scripts/sandbox/wrap-app.mjs";
 import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";

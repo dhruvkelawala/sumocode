@@ -1,4 +1,4 @@
-import { execFileSync } from "node:child_process";
+import { execTestAppSync as execFileSync } from "../../scripts/sandbox/wrap-app.mjs";
 import { appendFileSync, chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";

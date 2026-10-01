@@ -30,7 +30,9 @@
       "~/.npm",
       "~/.claude",
       ".git",
-      "scripts/sandbox"
+      "scripts/sandbox",
+      ".srt-spike/tooling",
+      ".srt-spike/settings"
     ]
   },
   "network": {

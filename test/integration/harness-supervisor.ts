@@ -7,6 +7,7 @@ import { basename, dirname, join } from "node:path";
 import { afterAll } from "vitest";
 import { spawn as spawnPty, type IPty, type IPtyForkOptions } from "node-pty";
 import { prepareHarnessAdmission } from "./harness-admission.js";
+import { wrapTestApp } from "../../scripts/sandbox/wrap-app.mjs";
 import {
 	HARNESS_OWNER_TOKEN_ENV_KEY,
 	HARNESS_RUN_ID_ENV_KEY,
@@ -458,6 +459,13 @@ function harnessGroupRegistration(pid: number, pgid: number, env: NodeJS.Process
 	};
 }
 
+export function spawnSupervisedApp(command: string, args: readonly string[], options: SpawnOptions = {}, ports: readonly number[] = []): SupervisedProcess {
+	if (!process.env.SUMOCODE_TEST_SANDBOX) return spawnSupervisedProcess(command, args, options);
+	requireHarnessAuth(options.env ?? {});
+	const app = wrapTestApp(command, args, { cwd: options.cwd?.toString(), env: options.env, ports });
+	return spawnSupervisedProcess(app.command, app.args, { ...options, env: app.env });
+}
+
 export function spawnSupervisedProcess(command: string, args: readonly string[], options: SpawnOptions = {}): SupervisedProcess {
 	const env = { ...options.env, [HARNESS_SIGNATURE_ENV_KEY]: HARNESS_SIGNATURE };
 	delete env[HARNESS_SIGNING_KEY_ENV_KEY];
@@ -547,11 +555,12 @@ export function spawnSupervisedProcess(command: string, args: readonly string[],
 	};
 }
 
-export function spawnSupervisedPty(command: string, args: readonly string[], options: IPtyForkOptions, evidence: ChildEvidenceContext, auth: HarnessAuth) {
-	const env = { ...options.env, [HARNESS_SIGNATURE_ENV_KEY]: HARNESS_SIGNATURE };
+export function spawnSupervisedPty(command: string, args: readonly string[], options: IPtyForkOptions, evidence: ChildEvidenceContext, auth: HarnessAuth, sandboxApp = true) {
+	const app = sandboxApp && process.env.SUMOCODE_TEST_SANDBOX ? wrapTestApp(command, args, options) : { command, args, env: options.env };
+	const env = { ...app.env, [HARNESS_SIGNATURE_ENV_KEY]: HARNESS_SIGNATURE };
 	delete env[HARNESS_SIGNING_KEY_ENV_KEY];
 	delete env[HARNESS_RUN_ID_ENV_KEY];
-	const admission = prepareHarnessAdmission(command, args, evidence.evidenceDir);
+	const admission = prepareHarnessAdmission(app.command, app.args, evidence.evidenceDir);
 	let child: IPty;
 	try {
 		child = spawnPty(admission.command, admission.args, { ...options, env });

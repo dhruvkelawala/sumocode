@@ -19,6 +19,11 @@ describe("judgeChoice", () => {
 		await expect(judgeChoice(answering("maybe"), { message: "hi" }, question)).resolves.toBeUndefined();
 	});
 
+	it("drops a confidence outside 0..1 instead of trusting the classifier", async () => {
+		await expect(judgeChoice(answering("yes", Number.NaN), { message: "hi" }, question)).resolves.toBeUndefined();
+		await expect(judgeChoice(answering("yes", 5), { message: "hi" }, question)).resolves.toBeUndefined();
+	});
+
 	it("resolves undefined when the classifier fails", async () => {
 		const failing: ChoiceClassifier = async () => {
 			throw new Error("network down");

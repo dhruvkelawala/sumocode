@@ -42,6 +42,7 @@ export async function judgeChoice<Option extends string>(
 	try {
 		const answer = await Promise.race([classify(state, question, signal), timedOut]);
 		if (!answer || !isOption(question, answer.choice)) return undefined;
+		if (!Number.isFinite(answer.confidence) || answer.confidence < 0 || answer.confidence > 1) return undefined;
 		return { choice: answer.choice, confidence: answer.confidence };
 	} catch {
 		return undefined;

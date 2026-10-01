@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { execFileSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { constants, existsSync } from "node:fs";
 import { lstat, readFile, readdir, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join, relative, resolve } from "node:path";
@@ -159,66 +159,94 @@ export function liveProcessStart(pid, execute = execFileSync) {
 	}
 }
 
+/* oxlint-disable anti-slop/no-runtime-typeof -- Owner JSON is untrusted state; validate present fields before contextual absence exemptions. */
 async function readOwner(path) {
-	try {
-		const owner = JSON.parse(await readFile(join(path, "owner.json"), "utf8"));
-		if (!Number.isSafeInteger(owner?.pid) || owner.pid <= 1) return undefined;
-		return {
-			pid: owner.pid,
-			mode: owner.mode === "focused" ? "focused" : "shared",
-			// oxlint-disable-next-line anti-slop/no-runtime-typeof -- owner.json is untrusted state parsed at this I/O boundary
-			runId: typeof owner.runId === "string" && owner.runId.length > 0 ? owner.runId : undefined,
-			// oxlint-disable-next-line anti-slop/no-runtime-typeof -- owner.json is untrusted state parsed at this I/O boundary
-			ownerToken: typeof owner.ownerToken === "string" && owner.ownerToken.length > 0
-				? owner.ownerToken
-				: undefined,
-			// oxlint-disable-next-line anti-slop/no-runtime-typeof -- owner.json is untrusted state parsed at this I/O boundary
-			ownerProcessStart: typeof owner.ownerProcessStart === "string" && owner.ownerProcessStart.length > 0
-				? owner.ownerProcessStart
-				: undefined,
-		};
-	} catch {
-		return undefined;
+	const ownerPath = join(path, "owner.json");
+	let before;
+	try { before = await lstat(ownerPath); } catch (error) {
+		return error?.code === "ENOENT" ? { absent: true } : { issue: "owner metadata unavailable" };
 	}
+	try {
+		if (!before.isFile()) return { issue: "owner is not a regular file (symlinks refused)" };
+		const contents = await readFile(ownerPath, { encoding: "utf8", flag: constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK });
+		const after = await lstat(ownerPath);
+		if (!after.isFile() || [before.dev, before.ino, before.size, before.mtimeMs, before.ctimeMs].join(":")
+			!== [after.dev, after.ino, after.size, after.mtimeMs, after.ctimeMs].join(":")) return { issue: "owner changed during read" };
+		const owner = JSON.parse(contents);
+		if (owner === null || typeof owner !== "object" || Array.isArray(owner)
+			|| !Number.isSafeInteger(owner.pid) || owner.pid <= 1) return { issue: "invalid owner object or pid" };
+		if (Object.hasOwn(owner, "mode") && !["shared", "focused"].includes(owner.mode)) return { issue: "invalid owner mode" };
+		for (const field of ["runId", "ownerToken", "ownerProcessStart"]) {
+			if (Object.hasOwn(owner, field) && (typeof owner[field] !== "string" || owner[field].trim().length === 0)) return { issue: "invalid present owner identity field" };
+		}
+		return { owner: { pid: owner.pid, mode: owner.mode, runId: owner.runId,
+			ownerToken: owner.ownerToken, ownerProcessStart: owner.ownerProcessStart } };
+	} catch {
+		return { issue: "owner read lost or malformed" };
+	}
+}
+/* oxlint-enable anti-slop/no-runtime-typeof */
+
+function unverifiedHarnessDir(path, code, reason) {
+	return { classification: "unknown", issue: { code, path, message: `${reason}: ${path}`,
+		remediation: "preserve this namespace and inspect its owner/census manually; fix and purge do not remove unknown state" } };
 }
 
 async function classifyHarnessDir(path, rowsByPid = new Map(), tokenIdentityAvailable = true) {
-	if (!HARNESS_DIR_PREFIXES.some((prefix) => basename(path).startsWith(prefix))) return "unrelated";
-	const owner = await readOwner(path);
+	const name = basename(path);
+	if (!HARNESS_DIR_PREFIXES.some((prefix) => name.startsWith(prefix))) return { classification: "unrelated" };
+	const ownerRead = await readOwner(path);
+	if (ownerRead.issue) return unverifiedHarnessDir(path, "harness-owner-unverified", ownerRead.issue);
+	const owner = ownerRead.owner;
+	if (ownerRead.absent && !name.startsWith("sumocode-fake-pi-")) return unverifiedHarnessDir(path, "harness-owner-unverified", "required v2 owner is absent");
+	const currentShared = name.startsWith("sumocode-harness-v2-run-") || owner?.mode === "shared";
+	const focused = owner?.mode === "focused";
+	if ((currentShared && (focused || owner?.runId === undefined || owner?.ownerToken === undefined))
+		|| (focused && (!name.startsWith("sumocode-harness-v2-focused-") || owner.runId === undefined || owner.ownerProcessStart === undefined))
+		|| (!focused && owner?.runId !== undefined && owner.ownerToken === undefined)) {
+		return unverifiedHarnessDir(path, "harness-owner-unverified", "owner lacks the concrete writer's required identity");
+	}
+	const census = await deadRunSpawnRegistrations(path, owner, focused || (!currentShared && owner?.runId === undefined));
+	if (census.issue) return unverifiedHarnessDir(path, "harness-census-unverified", census.issue);
 	if (owner !== undefined && pidIsAlive(owner.pid)) {
 		if (owner.ownerToken !== undefined) {
-			if (!tokenIdentityAvailable) return "live";
+			if (!tokenIdentityAvailable) return { classification: "live", owner };
 			const row = rowsByPid.get(owner.pid);
-			if (row !== undefined && hasProcessMarker(row, HARNESS_OWNER_TOKEN_ENV_KEY, owner.ownerToken)) return "live";
+			if (row !== undefined && hasProcessMarker(row, HARNESS_OWNER_TOKEN_ENV_KEY, owner.ownerToken)) return { classification: "live", owner };
 		} else if (owner.ownerProcessStart !== undefined) {
 			// Tokenless focused namespaces: identity = OS-reported start time of
 			// the recorded pid. A reused PID is a different process with a
 			// different start time, so the namespace classifies stale and --fix
 			// can reclaim it (Codex cycle-4, PR #422).
-			if (liveProcessStart(owner.pid) === owner.ownerProcessStart) return "live";
+			if (liveProcessStart(owner.pid) === owner.ownerProcessStart) return { classification: "live", owner };
 		} else {
 			// Legacy namespaces with neither identity field keep the original
 			// PID-liveness behavior.
-			return "live";
+			return { classification: "live", owner };
 		}
 	}
-	return existsSync(join(path, RETAINED_EVIDENCE_MARKER)) ? "retained" : "stale";
+	return { classification: existsSync(join(path, RETAINED_EVIDENCE_MARKER)) ? "retained" : "stale", registrations: census.registrations };
 }
 
 async function harnessState(tempRoot, rowsByPid, tokenIdentityAvailable) {
-	let entries = [];
-	try { entries = await readdir(tempRoot, { withFileTypes: true }); } catch { return { staleDirs: [], retainedDirs: [], liveOwnerPids: [], dirs: [] }; }
-	const state = { staleDirs: [], retainedDirs: [], liveOwnerPids: [], dirs: [] };
+	const state = { staleDirs: [], retainedDirs: [], liveOwnerPids: [], registrations: [], issues: [] };
+	let entries;
+	try { entries = await readdir(tempRoot, { withFileTypes: true }); } catch {
+		state.issues.push({
+			code: "harness-root-unavailable", message: "required harness temp root cannot be read",
+			remediation: "restore access to the required temp root and inspect it manually before retrying",
+		});
+		return state;
+	}
 	for (const entry of entries) {
 		if (!entry.isDirectory() || !HARNESS_DIR_PREFIXES.some((prefix) => entry.name.startsWith(prefix))) continue;
 		const path = join(tempRoot, entry.name);
-		state.dirs.push(path);
-		const classification = await classifyHarnessDir(path, rowsByPid, tokenIdentityAvailable);
-		if (classification === "live") {
-			const owner = await readOwner(path);
-			if (owner !== undefined) state.liveOwnerPids.push(owner.pid);
-		} else if (classification === "retained") state.retainedDirs.push(path);
-		else if (classification === "stale") state.staleDirs.push(path);
+		const result = await classifyHarnessDir(path, rowsByPid, tokenIdentityAvailable);
+		if (result.issue) state.issues.push(result.issue);
+		if (result.classification === "live") state.liveOwnerPids.push(result.owner.pid);
+		else if (result.classification === "retained") state.retainedDirs.push(path);
+		else if (result.classification === "stale") state.staleDirs.push(path);
+		for (const registration of result.registrations ?? []) state.registrations.push({ path, ...registration });
 	}
 	return state;
 }
@@ -228,24 +256,63 @@ async function harnessState(tempRoot, rowsByPid, tokenIdentityAvailable) {
  * dead runner that a same-user child could not also have read, so these are
  * identity records for a human, never proof that authorizes a signal.
  */
-async function deadRunSpawnRegistrations(path) {
-	const owner = await readOwner(path);
-	if (owner?.runId === undefined) return [];
+/* oxlint-disable anti-slop/no-runtime-typeof -- Postmortem records are schema-checked only; the signing key is gone and these never authorize signals. */
+function deadManifestEventIsValid(event, runId) {
+	if (event === null || typeof event !== "object" || Array.isArray(event)
+		|| !["spawn", "exit", "reaped"].includes(event.event)
+		|| !Number.isSafeInteger(event.pid) || event.pid <= 1
+		|| !Number.isSafeInteger(event.pgid) || event.pgid <= 1
+		|| (event.runId !== undefined && event.runId !== runId)) return false;
+	for (const field of ["processStart", "ownerProcessStart", "runId", "registrationHmac", "evidenceDir"]) {
+		if (Object.hasOwn(event, field) && (typeof event[field] !== "string" || event[field].trim().length === 0)) return false;
+	}
+	if ((event.ownerPid !== undefined && (!Number.isSafeInteger(event.ownerPid) || event.ownerPid <= 1 || event.ownerPid === event.pid))
+		|| (event.ownershipMode !== undefined && !["shared", "focused"].includes(event.ownershipMode))
+		|| (event.argv !== undefined && (!Array.isArray(event.argv) || !event.argv.every((arg) => typeof arg === "string")))
+		|| (event.kind !== undefined && event.kind !== "pty")
+		|| (event.code !== undefined && event.code !== null && !Number.isSafeInteger(event.code))
+		|| (event.signal !== undefined && event.signal !== null && typeof event.signal !== "string" && !Number.isSafeInteger(event.signal))) return false;
+	return event.event !== "spawn" || (event.runId === runId && typeof event.processStart === "string"
+		&& typeof event.ownerProcessStart === "string" && Number.isSafeInteger(event.ownerPid) && event.ownerPid > 1 && event.ownerPid !== event.pid
+		&& typeof event.registrationHmac === "string" && /^[a-f\d]{64}$/.test(event.registrationHmac));
+}
+/* oxlint-enable anti-slop/no-runtime-typeof */
+
+async function deadRunSpawnRegistrations(path, owner, allowAbsent) {
+	const manifest = join(path, "children.jsonl");
+	let before;
+	try { before = await lstat(manifest); } catch (error) {
+		if (error?.code === "ENOENT" && allowAbsent) return { registrations: [] };
+		return { issue: "required census absent or metadata unavailable" };
+	}
+	if (!before.isFile()) return { issue: "census is not a regular file (symlinks refused)" };
+	// PID-only legacy owners are supported only when no census/modern authority exists.
+	if (owner?.runId === undefined) return { issue: "present census lacks owner run identity" };
 	let contents;
-	try { contents = await readFile(join(path, "children.jsonl"), "utf8"); } catch { return []; }
+	try {
+		contents = await readFile(manifest, { encoding: "utf8", flag: constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK });
+		const after = await lstat(manifest);
+		if (!after.isFile() || [before.dev, before.ino, before.size, before.mtimeMs, before.ctimeMs].join(":")
+			!== [after.dev, after.ino, after.size, after.mtimeMs, after.ctimeMs].join(":")) return { issue: "census changed during read" };
+	} catch {
+		return { issue: "census read unavailable or lost" };
+	}
+	if (contents.length > 0 && !contents.endsWith("\n")) return { issue: "torn census line" };
 	const registrations = [];
+	const tuplesByPgid = new Map();
 	for (const line of contents.split("\n")) {
 		if (!line.trim()) continue;
-		try {
-			const event = JSON.parse(line);
-			if (event.event !== "spawn" || event.runId !== owner.runId) continue;
-			if (!Number.isSafeInteger(event.pid) || !Number.isSafeInteger(event.pgid)) continue;
-			registrations.push({ pid: event.pid, pgid: event.pgid, processStart: event.processStart });
-		} catch {
-			// A killed worker may leave one partial final append.
-		}
+		let event;
+		try { event = JSON.parse(line); } catch { return { issue: "malformed census line" }; }
+		if (!deadManifestEventIsValid(event, owner.runId)) return { issue: "invalid or foreign census event" };
+		if (event.event !== "spawn") continue;
+		const tuple = JSON.stringify([event.pid, event.pgid, event.processStart, event.ownerPid, event.ownerProcessStart, event.runId, event.registrationHmac]);
+		const previous = tuplesByPgid.get(event.pgid);
+		if (previous !== undefined && previous !== tuple) return { issue: "conflicting census registrations" };
+		if (previous === undefined) registrations.push({ pid: event.pid, pgid: event.pgid, processStart: event.processStart });
+		tuplesByPgid.set(event.pgid, tuple);
 	}
-	return registrations;
+	return { registrations };
 }
 
 function registrationMatchesRow(registration, row) {
@@ -323,6 +390,7 @@ export async function inspectIntegrationPreflight({ root = ROOT, tempRoot = tmpd
 	const notices = [];
 	const rowsByPid = new Map(processTable.rows.map((row) => [row.pid, row]));
 	const state = await harnessState(tempRoot, rowsByPid, processTable.issue === undefined);
+	issues.push(...state.issues);
 	const liveHarnessPids = new Set([
 		...state.liveOwnerPids,
 		...signedHarnessLineage(process.pid, rowsByPid),
@@ -332,12 +400,10 @@ export async function inspectIntegrationPreflight({ root = ROOT, tempRoot = tmpd
 	// can end them deliberately; --fix never signals on this evidence alone.
 	const registeredSurvivors = [];
 	if (processTable.issue === undefined) {
-		for (const path of state.dirs) {
-			for (const registration of await deadRunSpawnRegistrations(path)) {
-				const row = rowsByPid.get(registration.pid);
-				if (registrationMatchesRow(registration, row) && !belongsToLiveHarnessRun(row, rowsByPid, liveHarnessPids)) {
-					registeredSurvivors.push({ path, pid: registration.pid, pgid: registration.pgid, start: row.start, command: row.command.slice(0, 160) });
-				}
+		for (const registration of state.registrations) {
+			const row = rowsByPid.get(registration.pid);
+			if (registrationMatchesRow(registration, row) && !belongsToLiveHarnessRun(row, rowsByPid, liveHarnessPids)) {
+				registeredSurvivors.push({ path: registration.path, pid: registration.pid, pgid: registration.pgid, start: row.start, command: row.command.slice(0, 160) });
 			}
 		}
 	}
@@ -613,6 +679,9 @@ export async function fixIntegrationPreflight(report, {
 	if (tableIssue !== undefined) {
 		return { refused: true, reason: `${tableIssue.code}: refusing to signal or remove anything derived from an unverified process table` };
 	}
+	if (report.issues.some((issue) => issue.code === "harness-root-unavailable")) {
+		return { refused: true, reason: "harness-root-unavailable: refusing fix from an unreadable required root" };
+	}
 	const orphanIssue = report.issues.find((issue) => issue.code === "orphan-harness-children");
 	const rowsByPid = new Map(rows.map((row) => [row.pid, row]));
 	const liveHarnessPids = new Set(report.liveHarnessPids ?? []);
@@ -655,15 +724,22 @@ export async function fixIntegrationPreflight(report, {
 	const latestRowsByPid = new Map(latestRows.map((row) => [row.pid, row]));
 
 	const stateIssue = report.issues.find((issue) => issue.code === "stale-harness-state");
-	// Destructive boundary: classification rechecks the harness basename and owner identity; report paths alone never authorize rm.
+	const unresolved = report.issues.filter((issue) => issue.code === "harness-owner-unverified" || issue.code === "harness-census-unverified");
+	// Both destructive boundaries freshly validate owner AND census. Unknown
+	// beats stale/retained; a prior report and purge flag cannot authorize it.
 	for (const path of stateIssue?.paths ?? []) {
-		if (await classifyHarnessDir(path, latestRowsByPid) === "stale") await rm(path, { recursive: true, force: true });
+		const fresh = await classifyHarnessDir(path, latestRowsByPid);
+		if (fresh.issue) unresolved.push(fresh.issue);
+		if (fresh.classification === "stale") await rm(path, { recursive: true, force: true });
 	}
 	if (purgeEvidence) {
 		for (const path of report.retainedEvidence ?? []) {
-			if (await classifyHarnessDir(path, latestRowsByPid) === "retained") await rm(path, { recursive: true, force: true });
+			const fresh = await classifyHarnessDir(path, latestRowsByPid);
+			if (fresh.issue) unresolved.push(fresh.issue);
+			if (fresh.classification === "retained") await rm(path, { recursive: true, force: true });
 		}
 	}
+	if (unresolved.length > 0) return { refused: true, reason: "unverified harness state remains preserved", issues: unresolved };
 }
 
 export async function runIntegrationPreflight({ fix = false, purgeEvidence = false } = {}) {

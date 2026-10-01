@@ -1311,6 +1311,170 @@ describe("canonical census hardening", () => {
 	});
 });
 
+describe("canonical preflight read loss", () => {
+	const deadPid = 2_147_483_647;
+	const owner = { pid: deadPid, runId: "postmortem-run", ownerToken: "postmortem-owner" };
+	const spawn = { event: "spawn", pid: 60_001, pgid: 60_001, processStart: "leader-start",
+		ownerPid: 59_001, ownerProcessStart: "worker-start", runId: owner.runId, registrationHmac: "a".repeat(64) };
+
+	it.each(["file", "missing"])("names %s required root read loss", async (kind) => {
+		const root = createRunRoot();
+		const tempRoot = join(root, "unreadable-root");
+		if (kind === "file") writeFileSync(tempRoot, "not a directory");
+		const report = await inspectIntegrationPreflight({ root, tempRoot, rows: [], env: {} });
+		expect(report.issues).toContainEqual(expect.objectContaining({ code: "harness-root-unavailable" }));
+	});
+
+	it.each([
+		null, [], 42, {}, { pid: 1 }, { ...owner, mode: "bogus" }, { ...owner, runId: "" },
+		{ ...owner, ownerToken: "" }, { ...owner, ownerProcessStart: "" }, { ...owner, runId: 42 },
+		{ pid: deadPid }, { pid: deadPid, ownerToken: "legacy-token" },
+	])("preserves unknown current shared owners ahead of retention %j", async (record) => {
+		const root = createRunRoot();
+		mkdirSync(join(root, "node_modules"));
+		const namespace = join(root, "sumocode-harness-v2-run-invalid-owner");
+		mkdirSync(namespace);
+		writeFileSync(join(namespace, "owner.json"), JSON.stringify(record));
+		writeFileSync(join(namespace, "evidence-retained.json"), "{}\n");
+		const report = await inspectIntegrationPreflight({ root, tempRoot: root, rows: [], env: {} });
+		expect(report.issues).toContainEqual(expect.objectContaining({ code: "harness-owner-unverified" }));
+		expect(report.retainedEvidence).toEqual([]);
+		expect(report.issues.find((issue) => issue.code === "stale-harness-state")).toBeUndefined();
+	});
+
+	it.each(["absent", "directory", "symlink", "malformed"])("preserves %s v2 owner read loss", async (kind) => {
+		const root = createRunRoot();
+		const namespace = join(root, "sumocode-harness-v2-focused-owner-loss");
+		mkdirSync(namespace);
+		const path = join(namespace, "owner.json");
+		if (kind === "directory") mkdirSync(path);
+		if (kind === "malformed") writeFileSync(path, "private-owner-parse-secret");
+		if (kind === "symlink") { writeFileSync(join(root, "owner"), JSON.stringify(owner)); symlinkSync(join(root, "owner"), path); }
+		const report = await inspectIntegrationPreflight({ root, tempRoot: root, rows: [], env: {} });
+		expect(report.issues).toContainEqual(expect.objectContaining({ code: "harness-owner-unverified" }));
+		expect(JSON.stringify(report)).not.toContain("private-owner-parse-secret");
+		expect(report.retainedEvidence).toEqual([]);
+	});
+
+	it.each([
+		["sumocode-fake-pi-legacy", undefined, "stale"],
+		["sumocode-harness-v2-legacy-pid", { pid: deadPid }, "stale"],
+		["sumocode-harness-v2-legacy-token", { pid: deadPid, ownerToken: "legacy-token" }, "stale"],
+		["sumocode-harness-v2-legacy-birth", { pid: deadPid, ownerProcessStart: "legacy-birth" }, "stale"],
+		["sumocode-harness-v2-focused-lazy", { pid: deadPid, mode: "focused", runId: "focused-run", ownerProcessStart: "worker-start" }, "stale"],
+		["sumocode-harness-v2-focused-no-run", { pid: deadPid, mode: "focused", ownerProcessStart: "worker-start" }, "unknown"],
+		["sumocode-harness-v2-focused-no-birth", { pid: deadPid, mode: "focused", runId: "focused-run" }, "unknown"],
+		["sumocode-harness-v2-focused-bad-token", { pid: deadPid, mode: "focused", runId: "focused-run", ownerProcessStart: "worker-start", ownerToken: null }, "unknown"],
+		["sumocode-harness-v2-legacy-bad-mode", { pid: deadPid, mode: "invalid" }, "unknown"],
+		["sumocode-harness-v2-run-legacy-claim", { pid: deadPid }, "unknown"],
+		["sumocode-harness-v2-missing-owner", undefined, "unknown"],
+	] as const)("allows absent census only in concrete supported context %s", async (name, record, expected) => {
+		const root = createRunRoot();
+		const namespace = join(root, name);
+		mkdirSync(namespace);
+		if (record !== undefined) writeFileSync(join(namespace, "owner.json"), JSON.stringify(record));
+		const report = await inspectIntegrationPreflight({ root, tempRoot: root, rows: [], env: {} });
+		expect(report.issues.find((issue) => issue.code === "stale-harness-state")?.paths ?? []).toEqual(expected === "stale" ? [namespace] : []);
+		expect(report.issues.some((issue) => issue.code === "harness-owner-unverified")).toBe(expected === "unknown");
+	});
+
+	it.each(["missing", "directory", "symlink", "torn", "malformed", "foreign", "foreign exit", "nonobject", "unknown event", "bad birth", "bad HMAC", "bad exit"])(
+		"preserves dead shared %s census as manual unknown even with a table issue", async (kind) => {
+			const root = createRunRoot();
+			const namespace = join(root, "sumocode-harness-v2-run-census-loss");
+			mkdirSync(namespace);
+			writeFileSync(join(namespace, "owner.json"), JSON.stringify(owner));
+			writeFileSync(join(namespace, "evidence-retained.json"), "{}\n");
+			const path = join(namespace, "children.jsonl");
+			if (kind === "directory") mkdirSync(path);
+			else if (kind === "symlink") { writeFileSync(join(root, "census"), ""); symlinkSync(join(root, "census"), path); }
+			else if (kind !== "missing") writeFileSync(path, kind === "torn" ? "{\"event\":" : kind === "malformed" ? "private-census-parse-secret\n"
+				: `${JSON.stringify(kind === "foreign" ? { ...spawn, runId: "foreign-run" } : kind === "foreign exit" ? { event: "exit", pid: 60_001, pgid: 60_001, runId: "foreign-run" } : kind === "nonobject" ? null
+					: kind === "unknown event" ? { ...spawn, event: "alien" } : kind === "bad birth" ? { ...spawn, processStart: "" }
+						: kind === "bad HMAC" ? { ...spawn, registrationHmac: "not-hex64" } : { event: "exit", pid: 1, pgid: 60_001 })}\n`);
+			const report = await inspectIntegrationPreflight({ root, tempRoot: root,
+				rows: { rows: [], issue: { code: "process-table-unavailable", message: "synthetic", remediation: "manual" } }, env: {} });
+			expect(report.issues).toContainEqual(expect.objectContaining({ code: "harness-census-unverified" }));
+			expect(report.retainedEvidence).toEqual([]);
+			expect(report.issues.find((issue) => issue.code === "stale-harness-state")).toBeUndefined();
+			expect(JSON.stringify(report)).not.toContain("private-census-parse-secret");
+		});
+
+	it.each(["present", "directory"])("refuses legacy census without run authority when %s", async (kind) => {
+		const root = createRunRoot();
+		const namespace = join(root, "sumocode-harness-v2-legacy-census");
+		mkdirSync(namespace);
+		writeFileSync(join(namespace, "owner.json"), JSON.stringify({ pid: deadPid }));
+		if (kind === "directory") mkdirSync(join(namespace, "children.jsonl"));
+		else writeFileSync(join(namespace, "children.jsonl"), "");
+		const report = await inspectIntegrationPreflight({ root, tempRoot: root, rows: [], env: {} });
+		expect(report.issues).toContainEqual(expect.objectContaining({ code: "harness-census-unverified" }));
+	});
+
+	it("reports valid postmortem registrations for humans without authenticating or signaling them", async () => {
+		const root = createRunRoot();
+		mkdirSync(join(root, "node_modules"));
+		const namespace = join(root, "sumocode-harness-v2-run-human-only");
+		mkdirSync(namespace);
+		writeFileSync(join(namespace, "owner.json"), JSON.stringify(owner));
+		writeFileSync(join(namespace, "children.jsonl"), [spawn, { event: "exit", pid: 60_001, pgid: 60_001, code: 0, signal: null },
+			{ event: "reaped", pid: 60_001, pgid: 60_001 }].map((event) => JSON.stringify(event)).join("\n") + "\n");
+		const rows = [{ pid: 60_001, ppid: 1, pgid: 60_001, start: "leader-start", command: `${HARNESS_SIGNATURE_ENV_KEY}=${HARNESS_SIGNATURE} node survivor` }];
+		const signals: Array<[number, string]> = [];
+		const report = await inspectIntegrationPreflight({ root, tempRoot: root, rows, env: {} });
+		expect(report.issues.find((issue) => issue.code === "orphan-harness-children")?.registeredSurvivors).toEqual([
+			expect.objectContaining({ pid: 60_001, pgid: 60_001 }),
+		]);
+		await fixIntegrationPreflight(report, { table: { rows }, rows, readRows: () => rows, currentPgid: 99_999,
+			kill: (pid, signal) => { signals.push([pid, String(signal)]); return true; }, wait: async () => {},
+		});
+		expect(signals).toEqual([]);
+	});
+
+	for (const purgeEvidence of [false, true]) {
+		it.each(["owner removed", "owner corrupted", "owner replaced", "census removed", "census corrupted", "census replaced", "census directory"])(
+			`preserves newly unknown evidence at ${purgeEvidence ? "purge" : "fix"} boundary: %s`, async (mutation) => {
+				const root = createRunRoot();
+				mkdirSync(join(root, "node_modules"));
+				const namespace = join(root, "sumocode-harness-v2-run-fresh-boundary");
+				mkdirSync(namespace);
+				const ownerPath = join(namespace, "owner.json");
+				const censusPath = join(namespace, "children.jsonl");
+				writeFileSync(ownerPath, JSON.stringify(owner));
+				writeFileSync(censusPath, "");
+				if (purgeEvidence) writeFileSync(join(namespace, "evidence-retained.json"), "{}\n");
+				const report = await inspectIntegrationPreflight({ root, tempRoot: root, rows: [], env: {} });
+				expect(purgeEvidence ? report.retainedEvidence : report.issues.find((issue) => issue.code === "stale-harness-state")?.paths).toEqual([namespace]);
+				if (mutation === "owner removed") rmSync(ownerPath);
+				else if (mutation === "owner corrupted") writeFileSync(ownerPath, "{\"pid\":");
+				else if (mutation === "owner replaced") writeFileSync(ownerPath, JSON.stringify({ pid: deadPid }));
+				else if (mutation === "census removed") rmSync(censusPath);
+				else if (mutation === "census corrupted") writeFileSync(censusPath, "{\"event\":");
+				else if (mutation === "census replaced") writeFileSync(censusPath, `${JSON.stringify({ ...spawn, runId: "foreign" })}\n`);
+				else { rmSync(censusPath); mkdirSync(censusPath); }
+				const result = await fixIntegrationPreflight(report, { purgeEvidence,
+					table: { rows: [] }, rows: [], readRows: () => [], currentPgid: 99_999,
+					kill: () => { throw new Error("unknown namespaces never signal"); }, wait: async () => {},
+				});
+				expect(result).toMatchObject({ refused: true, issues: [expect.objectContaining({ code: expect.stringMatching(/^harness-(owner|census)-unverified$/) })] });
+				expect(existsSync(namespace)).toBe(true);
+				const fresh = await inspectIntegrationPreflight({ root, tempRoot: root, rows: [], env: {} });
+				expect(fresh.retainedEvidence).toEqual([]);
+				expect(fresh.issues.find((issue) => issue.code === "stale-harness-state")).toBeUndefined();
+			});
+	}
+
+	it("names a missing required root and refuses fix without any process I/O", async () => {
+		const root = createRunRoot();
+		const report = await inspectIntegrationPreflight({ root, tempRoot: join(root, "missing"), rows: [], env: {} });
+		expect(report.issues).toContainEqual(expect.objectContaining({ code: "harness-root-unavailable" }));
+		await expect(fixIntegrationPreflight(report, {
+			table: { rows: [] }, rows: [], readRows: () => { throw new Error("root loss refuses before reads"); },
+			currentPgid: 99_999, kill: () => { throw new Error("root loss refuses before signals"); }, wait: async () => {},
+		})).resolves.toMatchObject({ refused: true });
+	});
+});
+
 describe("harness manifest audit contract", () => {
 	it("treats a manifest's forged focused mode as shared", async () => {
 		const root = createRunRoot();

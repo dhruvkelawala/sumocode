@@ -36,8 +36,11 @@ export async function judgeChoice<Option extends string>(
 	question: ChoiceQuestion<Option>,
 	timeoutMs = DEFAULT_TIMEOUT_MS,
 ): Promise<ChoiceAnswer<Option> | undefined> {
+	const signal = AbortSignal.timeout(timeoutMs);
+	// Bound the wait here too: a transport that ignores the signal must not hold the caller.
+	const timedOut = new Promise<undefined>((resolve) => signal.addEventListener("abort", () => resolve(undefined), { once: true }));
 	try {
-		const answer = await classify(state, question, AbortSignal.timeout(timeoutMs));
+		const answer = await Promise.race([classify(state, question, signal), timedOut]);
 		if (!answer || !isOption(question, answer.choice)) return undefined;
 		return { choice: answer.choice, confidence: answer.confidence };
 	} catch {

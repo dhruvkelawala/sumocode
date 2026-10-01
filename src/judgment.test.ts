@@ -34,6 +34,13 @@ describe("judgeChoice", () => {
 		await expect(judgeChoice(slow, { message: "hi" }, question, 20)).resolves.toBeUndefined();
 		expect(Date.now() - started).toBeLessThan(1_000);
 	});
+
+	it("bounds the wait even when the transport ignores the abort signal", async () => {
+		const stubborn: ChoiceClassifier = () => new Promise((resolve) => setTimeout(() => resolve({ choice: "yes", confidence: 1 }), 500));
+		const started = Date.now();
+		await expect(judgeChoice(stubborn, { message: "hi" }, question, 20)).resolves.toBeUndefined();
+		expect(Date.now() - started).toBeLessThan(400);
+	});
 });
 
 describe("typesafeChoiceClassifier", () => {

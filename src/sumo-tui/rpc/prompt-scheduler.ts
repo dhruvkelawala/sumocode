@@ -43,6 +43,18 @@ export interface RpcPromptRestoreResult {
 
 export interface RpcSchedulerEvent {
 	readonly type?: string;
+	readonly message?: RpcSchedulerMessage;
+}
+
+/** The part of a Pi message the scheduler reads: which user message opened a turn. */
+export interface RpcSchedulerMessage {
+	readonly role?: string;
+	readonly content?: string | RpcSchedulerContentBlock[];
+}
+
+export interface RpcSchedulerContentBlock {
+	readonly type?: string;
+	readonly text?: string;
 }
 
 export interface RpcPromptScheduler {
@@ -73,6 +85,12 @@ function combineDrafts(restored: readonly string[], currentDraft: string): strin
 	return parts.join("\n\n");
 }
 
+function userMessageText(message: RpcSchedulerMessage | undefined): string | undefined {
+	if (message?.role !== "user" || message.content === undefined) return undefined;
+	if (!Array.isArray(message.content)) return message.content;
+	return message.content.flatMap((block) => block.type === "text" && block.text !== undefined ? [block.text] : []).join("\n");
+}
+
 function containsQueuedAttachment(message: string): boolean {
 	return /pi-clipboard-[\w-]+\.(?:png|jpe?g|gif|webp)/i.test(message);
 }
@@ -88,8 +106,12 @@ export function createRpcPromptScheduler(options: RpcPromptSchedulerOptions): Rp
 class DefaultRpcPromptScheduler implements RpcPromptScheduler {
 	private queue: LocalQueuedPrompt[] = [];
 	private sessionId: string | undefined;
-	/** The prompt that started the current run: context for `auto` delivery. */
+	/** What the agent is working on: context for `auto` delivery. */
 	private currentTask: string | undefined;
+	/** Pi's next user message opens the run that just started: it becomes the task. */
+	private runTaskPending = false;
+	/** Follow-ups sent to Pi and not yet started; each becomes the task when Pi starts it. */
+	private pendingFollowUps: string[] = [];
 	private generation = 0;
 	private lifecycleBusy = false;
 	/** An idle prompt was sent and Pi's `agent_start` for it has not arrived yet. */
@@ -136,9 +158,15 @@ class DefaultRpcPromptScheduler implements RpcPromptScheduler {
 
 	public handleAgentEvent(event: RpcSchedulerEvent): void {
 		if (event.type === "agent_start" || event.type === "agent_settled") this.awaitingRunStart = false;
-		if (event.type === "agent_start") this.lifecycleBusy = true;
+		if (event.type === "agent_start") {
+			this.lifecycleBusy = true;
+			this.runTaskPending = true;
+		}
+		if (event.type === "message_start") this.trackTask(userMessageText(event.message));
 		if (event.type === "agent_settled") {
 			this.lifecycleBusy = false;
+			this.runTaskPending = false;
+			this.pendingFollowUps = [];
 			void this.flush(this.generation);
 		}
 		if (event.type === "compaction_end") void this.flush(this.generation);
@@ -147,6 +175,7 @@ class DefaultRpcPromptScheduler implements RpcPromptScheduler {
 	public restoreAll(currentDraft: string): RpcPromptRestoreResult {
 		const restored = this.queue.map((entry) => entry.text);
 		this.queue = [];
+		this.pendingFollowUps = [];
 		this.pausedAfterFailure = false;
 		this.generation += 1;
 		this.publishQueue();
@@ -199,6 +228,21 @@ class DefaultRpcPromptScheduler implements RpcPromptScheduler {
 		} finally {
 			this.flushing = false;
 		}
+		// A restore while this flush awaited Jev bumped the generation: drain what was queued since.
+		if (generation !== this.generation && this.queue.length > 0) void this.flush(this.generation);
+	}
+
+	private trackTask(text: string | undefined): void {
+		if (text === undefined) return;
+		if (this.runTaskPending) {
+			this.runTaskPending = false;
+			this.currentTask = text;
+			return;
+		}
+		const started = this.pendingFollowUps.indexOf(text);
+		if (started < 0) return;
+		this.currentTask = text;
+		this.pendingFollowUps.splice(0, started + 1);
 	}
 
 	private isBusy(): boolean {
@@ -217,6 +261,7 @@ class DefaultRpcPromptScheduler implements RpcPromptScheduler {
 		this.options.onDispatchStart?.(entry.text);
 		try {
 			await this.options.sendPrompt(entry.text, { streamingBehavior: entry.delivery });
+			if (entry.delivery === "followUp") this.pendingFollowUps.push(entry.text);
 			return generation === this.generation;
 		} catch (error) {
 			// A failed send started no run, or its agent_start will say otherwise.

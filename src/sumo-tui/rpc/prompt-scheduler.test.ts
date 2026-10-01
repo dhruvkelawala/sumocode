@@ -265,6 +265,50 @@ describe("RpcPromptScheduler auto delivery", () => {
 		expect(decideDelivery).not.toHaveBeenCalled();
 	});
 
+	it("drains a submission made after a restore while the old message was still being judged", async () => {
+		const first = deferredDelivery();
+		const decideDelivery = vi.fn().mockReturnValueOnce(first.promise).mockResolvedValue("steer");
+		const sent: string[] = [];
+		const scheduler = createRpcPromptScheduler({ getBusy: () => true, decideDelivery, sendPrompt: async (message) => { sent.push(message); } });
+
+		await scheduler.submit("first", { delivery: "auto" });
+		scheduler.restoreAll("");
+		await scheduler.submit("second", { delivery: "auto" });
+		first.resolve("followUp");
+		await flush();
+		await flush();
+		await flush();
+
+		expect(sent).toEqual(["second"]);
+		expect(scheduler.getSnapshot().queuedMessages).toEqual([]);
+	});
+
+	it("judges against what the agent is working on: the run's first user message, then each follow-up Pi starts", async () => {
+		const decideDelivery = vi.fn(async (): Promise<RpcPromptDeliveryMode> => "followUp");
+		const scheduler = createRpcPromptScheduler({ getBusy: () => true, decideDelivery, sendPrompt: async () => undefined });
+		const userMessage = (text: string) => ({ type: "message_start", message: { role: "user", content: [{ type: "text", text }, { type: "image" }] } });
+
+		// A run the scheduler never sent (an image draft or an extension) still names its task.
+		scheduler.handleAgentEvent({ type: "agent_start" });
+		scheduler.handleAgentEvent(userMessage("inspect [Image 1]"));
+		await scheduler.submit("after that, open a PR", { delivery: "auto" });
+		await flush();
+		await flush();
+		expect(decideDelivery).toHaveBeenLastCalledWith("after that, open a PR", "inspect [Image 1]");
+
+		// A steer is not a new task; the follow-up becomes the task once Pi starts it.
+		scheduler.handleAgentEvent(userMessage("use a Map"));
+		await scheduler.submit("and add a test", { delivery: "auto" });
+		await flush();
+		await flush();
+		expect(decideDelivery).toHaveBeenLastCalledWith("and add a test", "inspect [Image 1]");
+		scheduler.handleAgentEvent(userMessage("after that, open a PR"));
+		await scheduler.submit("use the gh CLI", { delivery: "auto" });
+		await flush();
+		await flush();
+		expect(decideDelivery).toHaveBeenLastCalledWith("use the gh CLI", "after that, open a PR");
+	});
+
 	it("steers when the decider rejects", async () => {
 		const sendPrompt = vi.fn(async () => undefined);
 		const scheduler = createRpcPromptScheduler({

@@ -27,7 +27,7 @@ import { RpcChildExitError, SumoRpcClient, truncateForNotification } from "./cli
 import { ChromeCacheWorkerClient } from "./chrome-cache-worker-client.js";
 import type { CachedChrome } from "./chrome-cache.js";
 import { RpcHostLifecycle, writeExitCodeFile } from "./host-lifecycle.js";
-import { modelOptionsFrom, RpcHostControls, type RpcModelOption, type RpcThinkingLevel } from "./controls.js";
+import { modelOptionsFrom, RpcHostControls, type RpcClearedQueue, type RpcModelOption, type RpcThinkingLevel } from "./controls.js";
 import { createRpcKeybindingsManager, RpcHostEditorController } from "./editor.js";
 import { createRpcExtensionUiResponder } from "./extension-ui-responder.js";
 import { InMemoryRpcTreeNavigationOutcomeBroker, type RpcTreeNavigationRequest } from "../pi-compat/tree-navigation-command.js";
@@ -819,13 +819,29 @@ export function createRpcQueueRestoreTransaction(deps: RpcQueueRestoreDependenci
 			deps.notifications.dismissSticky?.();
 			const sessionId = deps.stateStore.getSnapshot().sessionId;
 			const generation = deps.getGeneration?.();
-			const cleared = await deps.controls.clearQueue();
+			// Take the local queue before awaiting Pi: a message whose `auto` delivery Jev
+			// decides during the clear would otherwise be sent after it and escape the restore.
+			const local = deps.scheduler.restoreAll("");
+			const keepLocal = (): void => {
+				if (local.count === 0) return;
+				const draft = deps.editor.getText();
+				deps.editor.setText(draft.length > 0 ? `${local.text}\n\n${draft}` : local.text);
+			};
+			let cleared: RpcClearedQueue;
+			try {
+				cleared = await deps.controls.clearQueue();
+			} catch (error) {
+				keepLocal();
+				throw error;
+			}
 			if (deps.stateStore.getSnapshot().sessionId !== sessionId || deps.getGeneration?.() !== generation) {
+				keepLocal();
 				throw new Error("queue owner changed during clear");
 			}
-			const local = deps.scheduler.restoreAll(deps.editor.getText());
 			const restored = [...cleared.steering, ...cleared.followUp];
-			if (local.text.length > 0) restored.push(local.text);
+			if (local.count > 0) restored.push(local.text);
+			const draft = deps.editor.getText();
+			if (restored.length > 0 && draft.length > 0) restored.push(draft);
 			if (restored.length > 0) deps.editor.setText(restored.join("\n\n"));
 			deps.onStateChange?.(deps.stateStore.clearPiQueueProjection());
 			if (restored.some((text) => /pi-clipboard-[\w-]+\.(?:png|jpe?g|gif|webp)/i.test(text))) {

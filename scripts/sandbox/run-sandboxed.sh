@@ -12,7 +12,7 @@ node_bin=/Users/sumodeus/.npm/_npx/1c56de6e9acc34f8/node_modules/node/bin
 pnpm_cli=/Users/sumodeus/.npm/_npx/2a8f335dab1edcb2/node_modules/pnpm/bin/pnpm.cjs
 state="$root/.srt-spike"
 srt="$state/tooling/node_modules/@anthropic-ai/sandbox-runtime"
-[[ -f "$srt/dist/cli.js" ]] || { printf 'install local srt 0.0.78 first; see plans/120-spike/srt-spike-results.md\n' >&2; exit 2; }
+[[ -f "$srt/dist/cli.js" ]] || { printf 'install local srt 0.0.78 first; see docs/security/srt-test-sandbox.md\n' >&2; exit 2; }
 [[ "$("$node_bin/node" -p 'JSON.parse(require("fs").readFileSync(process.argv[1])).version' "$srt/package.json")" == 0.0.78 ]] || { printf 'srt version must be 0.0.78\n' >&2; exit 2; }
 mkdir -p "$state"/{bin,tmp,cache,config,npm-cache,compile-cache,agent}
 printf '#!/bin/bash\nexec "%s/node" "%s" "$@"\n' "$node_bin" "$pnpm_cli" > "$state/bin/pnpm"

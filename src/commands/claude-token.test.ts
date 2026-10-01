@@ -66,6 +66,19 @@ describe("parseAuthorizationUrl", () => {
 		expect(parseAuthorizationUrl(output)).toBe("https://claude.ai/oauth/authorize?code=true&client_id=x");
 	});
 
+	it("extracts one clean destination from Claude CLI terminal hyperlinks and colors", () => {
+		const url = `https://claude.ai/oauth/authorize?code=true&state=${"x".repeat(180)}&redirect_uri=http%3A%2F%2Flocalhost%3A12345%2Fcallback`;
+		for (const output of [
+			`\x1b]8;;${url}\x07${url}\x1b]8;;\x07`,
+			`\x1b]8;;${url}\x1b\\open browser\x1b]8;;\x1b\\`,
+			`Open \x1b[36m${url}\x1b[39m to continue`,
+			`${url}\x1b]8;;\x07`,
+			`\x9d8;;${url}\x9copen browser\x9d8;;\x9c`,
+		]) {
+			expect(parseAuthorizationUrl(output)).toBe(url);
+		}
+	});
+
 	it("returns undefined when no URL is present", () => {
 		expect(parseAuthorizationUrl("waiting…")).toBeUndefined();
 	});

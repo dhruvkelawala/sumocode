@@ -1,4 +1,4 @@
-import { visibleWidth } from "@earendil-works/pi-tui";
+import { resetCapabilitiesCache, setCapabilities, visibleWidth } from "@earendil-works/pi-tui";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CellBuffer } from "../render/buffer.js";
 import type { MouseEvent } from "../input/mouse.js";
@@ -11,6 +11,7 @@ import { InlineSelectorHost } from "./inline-selector.js";
 import { RpcShellAdapter } from "./shell-adapter.js";
 import type { RpcHostChromeState } from "./state.js";
 import type { TranscriptViewModel } from "../transcript/view-model.js";
+import { SharedInputRouter } from "../input/shared-input-router.js";
 
 function state(overrides: Partial<RpcHostChromeState> = {}): RpcHostChromeState {
 	return {
@@ -45,13 +46,14 @@ class SpyNotifications {
 	}
 }
 
-async function makeAdapter(options: { terminal?: SpyTerminal; notifications?: SpyNotifications } = {}): Promise<RpcShellAdapter> {
+async function makeAdapter(options: { terminal?: SpyTerminal; notifications?: SpyNotifications; openLink?: (url: string) => Promise<boolean> } = {}): Promise<RpcShellAdapter> {
 	return RpcShellAdapter.create({
 		terminal: options.terminal ?? { writeFramePatches: () => undefined },
 		viewport: { columns: 100, rows: 30 },
 		initialState: state(),
 		initialTranscript: { messages: [] },
 		notifications: options.notifications,
+		openLink: options.openLink,
 	});
 }
 
@@ -736,6 +738,44 @@ describe("RpcShellAdapter chat update", () => {
 });
 
 describe("RpcShellAdapter mouse drag-select + OSC52 copy", () => {
+	it("opens the complete SYSTEM authorization URL on a plain SGR click, while drag still copies", async () => {
+		setCapabilities({ images: null, trueColor: true, hyperlinks: true });
+		const openLink = vi.fn(async (_url: string) => true);
+		const terminal = new SpyTerminal();
+		const notifications = new SpyNotifications();
+		const adapter = await makeAdapter({ terminal, notifications, openLink });
+		try {
+			const url = `https://claude.com/cai/auth/authorize?state=${"x".repeat(180)}&redirect_uri=http%3A%2F%2Flocalhost%3A12345%2Fcallback`;
+			adapter.getChatSink().addViewModel({
+				id: "auth", role: "system", displayName: "SYSTEM",
+				blocks: [{ type: "markdown", text: `[open Claude authorization](<${url}>)` }],
+			});
+			adapter.render();
+			const start = findText(adapter.getLastFrame()!, "open Claude authorization");
+			const router = new SharedInputRouter({ handleMouseEvent: (event) => adapter.handleMouseEvent(event) });
+			const sgr = (code: number, col: number, suffix: string) => `\x1b[<${code};${col + 1};${start.row + 1}${suffix}`;
+			// A lost release must not survive a new press on non-selectable framing.
+			expect(adapter.getLastFrame()!.getSelectionMeta(start.row, 0)).toBeUndefined();
+			router.handleInput(sgr(0, start.col, "M") + sgr(0, 0, "M") + sgr(0, start.col, "m"));
+			expect(openLink).not.toHaveBeenCalled();
+			router.handleInput(sgr(0, start.col, "M") + sgr(0, start.col, "m"));
+			expect(openLink).toHaveBeenCalledExactlyOnceWith(url);
+			expect(terminal.clipboardSequences).toHaveLength(0);
+
+			openLink.mockClear();
+			router.handleInput(sgr(0, start.col, "M") + sgr(32, start.col + 4, "M") + sgr(0, start.col + 4, "m"));
+			expect(openLink).not.toHaveBeenCalled();
+			expect(terminal.clipboardSequences).toHaveLength(1);
+
+			openLink.mockResolvedValueOnce(false);
+			router.handleInput(sgr(0, start.col, "M") + sgr(0, start.col, "m"));
+			await Promise.resolve();
+			expect(notifications.notifications).toContainEqual({ message: "unable to open link in the browser", level: "error" });
+		} finally {
+			adapter.dispose();
+			resetCapabilitiesCache();
+		}
+	});
 	it("turns a drag press/move/up over chat text into a selection, auto-copies via OSC52, and notifies nothing", async () => {
 		const terminal = new SpyTerminal();
 		const notifications = new SpyNotifications();

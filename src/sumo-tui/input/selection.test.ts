@@ -12,6 +12,41 @@ function bufferWithRow(text: string, cols = text.length): CellBuffer {
 }
 
 describe("SelectionController", () => {
+	it("activates the full hyperlink on a click, but not a drag or a changed target", () => {
+		const url = `https://claude.com/cai/auth/authorize?state=${"x".repeat(180)}`;
+		const buffer = bufferWithRow("open Claude authorization");
+		for (let col = 0; col < 25; col += 1) {
+			buffer.setCell(0, col, { ...buffer.getCell(0, col), hyperlink: url });
+		}
+		const onLinkActivated = vi.fn();
+		const emitClipboard = vi.fn();
+		const selection = new SelectionController({ onLinkActivated, emitClipboard });
+		const mouse = (type: "down" | "drag" | "up", col: number) => ({ type, button: 0, row: 0, col, modifiers: { shift: false, alt: false, ctrl: false } });
+
+		selection.handleMouseEvent(mouse("down", 2), buffer);
+		expect(onLinkActivated).not.toHaveBeenCalled();
+		selection.handleMouseEvent(mouse("up", 2), buffer);
+		expect(onLinkActivated).toHaveBeenCalledExactlyOnceWith(url);
+		expect(emitClipboard).not.toHaveBeenCalled();
+
+		onLinkActivated.mockClear();
+		selection.handleMouseEvent(mouse("down", 2), buffer);
+		selection.handleMouseEvent(mouse("drag", 8), buffer);
+		selection.handleMouseEvent(mouse("up", 8), buffer);
+		expect(emitClipboard).toHaveBeenCalledOnce();
+		expect(onLinkActivated).not.toHaveBeenCalled();
+
+		selection.handleMouseEvent(mouse("down", 2), buffer);
+		selection.handleMouseEvent(mouse("drag", 8), buffer);
+		selection.handleMouseEvent(mouse("drag", 2), buffer);
+		selection.handleMouseEvent(mouse("up", 2), buffer);
+		expect(onLinkActivated).not.toHaveBeenCalled();
+
+		selection.handleMouseEvent(mouse("down", 2), buffer);
+		buffer.setCell(0, 2, { ...buffer.getCell(0, 2), hyperlink: "https://example.com/replaced" });
+		selection.handleMouseEvent(mouse("up", 2), buffer);
+		expect(onLinkActivated).not.toHaveBeenCalled();
+	});
 	it("does not start semantic selection from non-selectable frame cells", () => {
 		const buffer = bufferWithRow("│ selectable │", 16);
 		for (let col = 2; col <= 11; col += 1) buffer.setSelectionMeta(0, col, { selectable: true });

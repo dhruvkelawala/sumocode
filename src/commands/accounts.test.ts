@@ -145,9 +145,9 @@ function commandContext(ctx: ReturnType<typeof makeCtx>["ctx"]): ExtensionComman
 	return ctx as never;
 }
 
-function extensionApi(setModel?: ExtensionAPI["setModel"]): ExtensionAPI {
-	// SAFETY: the double provides setModel, the only ExtensionAPI member the account flows invoke; switchAccount guards its call sites.
-	return { setModel } as never;
+function extensionApi(setModel?: ExtensionAPI["setModel"], sendMessage = vi.fn()): ExtensionAPI {
+	// SAFETY: the double provides the setModel and sendMessage members used by account flows.
+	return { setModel, sendMessage } as never;
 }
 
 function selectOptionsAt(select: ReturnType<typeof makeCtx>["select"], callIndex: number): string[] {
@@ -1189,6 +1189,32 @@ describe("long-lived token sign-in", () => {
 		});
 		expect(notify).toHaveBeenCalledWith(expect.stringContaining("Acme Org"), "info");
 		expect(refreshAccountStatus).toHaveBeenCalledOnce();
+	});
+
+	it("publishes a single SYSTEM authorization message with a complete Markdown link", async () => {
+		const agentDir = tempAgentDir();
+		const sendMessage = vi.fn();
+		const url = `https://claude.com/cai/auth/authorize?redirect_uri=${encodeURIComponent("http://localhost:12345/callback")}&state=${"x".repeat(180)}&code_challenge=${"y".repeat(64)}`;
+		const { ctx, setWidget } = makeCtx({
+			agentDir,
+			onSelect: pickAccountAction("default", SIGN_IN_LONG_LIVED),
+		});
+		await executeAccountsCommand(extensionApi(undefined, sendMessage), commandContext(ctx), tokenAccountDeps(agentDir, {
+			acquireToken: async ({ onProgress }) => {
+				onProgress?.("waiting for browser authorization");
+				// Claude CLI emits OSC 8 wrappers as well as the visible URL.
+				onProgress?.(`\x1b]8;;${url}\x07${url}\x1b]8;;\x07`);
+				onProgress?.(`${url}\x1b]8;;\x07`);
+				return { status: "ok", token: TOKEN };
+			},
+		}));
+		expect(sendMessage).toHaveBeenCalledExactlyOnceWith({
+			customType: "claude-authorization",
+			content: `authorize default account in the browser:\n\n[open Claude authorization](<${url}>)`,
+			display: true,
+		}, { triggerTurn: false });
+		expect(setWidget.mock.calls.some(([, lines]) => lines?.some((line: string) => line.includes(url)))).toBe(false);
+		expect(JSON.stringify(sendMessage.mock.calls)).not.toContain(TOKEN);
 	});
 
 	it("falls back to the masked paste modal when the CLI is missing", async () => {

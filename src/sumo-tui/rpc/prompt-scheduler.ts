@@ -130,7 +130,8 @@ class DefaultRpcPromptScheduler implements RpcPromptScheduler {
 		const command = message.trimStart().startsWith("/");
 		// Only a busy (or compaction-held) non-command submission has a delivery worth judging; any
 		// other `auto` steers. A held one is judged after compaction, if the agent is still busy then.
-		const judge = options.delivery === "auto" && !command && (compacting || this.isBusy());
+		// An attachment can't wait in the host queue, so it is never held for a judgement.
+		const judge = options.delivery === "auto" && !command && !containsQueuedAttachment(message) && (compacting || this.isBusy());
 		const fixed: RpcPromptDeliveryMode = options.delivery === "auto" ? "steer" : options.delivery;
 		if (compacting && command) {
 			void this.dispatch({ text: message, delivery: fixed }, this.generation, false);

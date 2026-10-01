@@ -407,6 +407,18 @@ describe("RpcPromptScheduler auto delivery", () => {
 		expect(sendPrompt.mock.calls).toEqual([["after that, open a PR", { streamingBehavior: "followUp" }]]);
 	});
 
+	it("never holds an attachment for a judgement, even before Pi reports agent_start", async () => {
+		const decideDelivery = vi.fn(async (): Promise<RpcPromptDeliveryMode> => "followUp");
+		const sendPrompt = vi.fn(async () => undefined);
+		const scheduler = createRpcPromptScheduler({ getBusy: () => false, decideDelivery, sendPrompt });
+		await scheduler.submit("start", { delivery: "auto" });
+		await scheduler.submit("inspect /tmp/pi-clipboard-shot.png", { delivery: "auto" });
+		await flush();
+		expect(decideDelivery).not.toHaveBeenCalled();
+		expect(scheduler.getSnapshot().localQueue).toEqual([]);
+		expect(sendPrompt.mock.calls.at(-1)).toEqual(["inspect /tmp/pi-clipboard-shot.png", { streamingBehavior: "steer" }]);
+	});
+
 	it("steers when the decider rejects", async () => {
 		const sendPrompt = vi.fn(async () => undefined);
 		const scheduler = createRpcPromptScheduler({

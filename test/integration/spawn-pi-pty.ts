@@ -1,4 +1,5 @@
 import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { createTestAgentDir } from "../../scripts/sandbox/wrap-app.mjs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -226,6 +227,9 @@ export function buildSpawnEnv(parent: NodeJS.ProcessEnv, overrides: NodeJS.Proce
 		env.SUMOCODE_INTEGRATION_RUN_ROOT = runRoot;
 		env.TMPDIR = tempRoot;
 		env.NODE_COMPILE_CACHE = compileCache;
+		// Pipe apps need the same owned Pi state as PTYs. The run owns its
+		// lifetime; explicit per-test agent fixtures remain unchanged.
+		env.PI_CODING_AGENT_DIR ||= createTestAgentDir(tempRoot, process.cwd());
 		delete env.NODE_PATH;
 	}
 	return env;

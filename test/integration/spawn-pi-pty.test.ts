@@ -166,6 +166,28 @@ describe("buildSpawnEnv", () => {
 		expect(env.TERM).toBe("xterm-256color");
 	});
 
+	it("gives each run-scoped app private Pi trust state instead of inherited developer config", () => {
+		const runRoot = mkdtempSync(join(tmpdir(), "sumocode-agent-env-"));
+		try {
+			const parent = { SUMOCODE_INTEGRATION_RUN_ROOT: runRoot, PI_CODING_AGENT_DIR: "/private/developer/pi", XDG_CONFIG_HOME: "/private/developer/config" };
+			const first = buildSpawnEnv(parent, undefined);
+			const second = buildSpawnEnv(parent, undefined);
+			for (const env of [first, second]) {
+				const root = env.PI_CODING_AGENT_DIR;
+				if (!root) throw new Error("missing owned agent state");
+				expect(root.startsWith(join(runRoot, "tmp"))).toBe(true);
+				expect(statSync(root).mode & 0o077).toBe(0);
+				expect(JSON.parse(readFileSync(join(root, "trust.json"), "utf8"))).toEqual({ [process.cwd()]: true });
+				expect(statSync(join(root, "trust.json")).mode & 0o077).toBe(0);
+				expect(env.XDG_CONFIG_HOME).toBeUndefined();
+			}
+			expect(first.PI_CODING_AGENT_DIR).not.toBe(second.PI_CODING_AGENT_DIR);
+			expect(buildSpawnEnv(parent, { PI_CODING_AGENT_DIR: runRoot }).PI_CODING_AGENT_DIR).toBe(runRoot);
+		} finally {
+			rmSync(runRoot, { recursive: true, force: true });
+		}
+	});
+
 	it("applies pi-friendly defaults", () => {
 		const env = buildSpawnEnv({}, undefined);
 		expect(env.PI_OFFLINE).toBe("1");

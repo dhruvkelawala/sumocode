@@ -1,4 +1,5 @@
 import type { ExecFileSyncOptionsWithStringEncoding, SpawnSyncOptionsWithStringEncoding, SpawnSyncReturns } from "node:child_process";
+export function createTestAgentDir(tempDir: string, cwd: string): string;
 export function wrapTestApp(command: string, args: readonly string[], options?: {
 	env?: NodeJS.ProcessEnv;
 	cwd?: string;

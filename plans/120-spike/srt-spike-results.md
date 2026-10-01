@@ -27,7 +27,7 @@
 Run from this checkout, using the Node/pnpm paths embedded in the wrapper:
 
 ```bash
-mkdir -p .srt-spike/{tmp,npm-cache,cache,config,tooling}
+mkdir -p .srt-spike/{tmp,npm-cache,cache,config,tooling,bin}
 touch .srt-spike/empty-user.npmrc .srt-spike/empty-global.npmrc
 export PATH="/Users/sumodeus/.npm/_npx/1c56de6e9acc34f8/node_modules/node/bin:$PATH"
 export TMPDIR="$PWD/.srt-spike/tmp" XDG_CACHE_HOME="$PWD/.srt-spike/cache"
@@ -39,6 +39,12 @@ node /Users/sumodeus/.npm/_npx/2a8f335dab1edcb2/node_modules/pnpm/bin/pnpm.cjs i
 npm install --prefix "$PWD/.srt-spike/tooling" --ignore-scripts --no-audit --no-fund \
   @anthropic-ai/sandbox-runtime@0.0.78 @oven/bun-darwin-aarch64@1.4.0
 chmod u+x node_modules/node-pty/prebuilds/darwin-arm64/spawn-helper
+# macOS only: Seatbelt refuses root-setuid /bin/ps. Copy drops setuid;
+# ad-hoc re-signing is required or macOS kills the modified executable.
+if [ "$(uname -s)" = Darwin ]; then
+  cp /bin/ps .srt-spike/bin/ps
+  codesign -s - -f .srt-spike/bin/ps
+fi
 PLAYWRIGHT_BROWSERS_PATH="$PWD/.srt-spike/browsers" node node_modules/playwright/cli.js install chromium
 scripts/sandbox/run-sandboxed.sh node scripts/sandbox/canary.mjs
 scripts/sandbox/run-sandboxed.sh pnpm test

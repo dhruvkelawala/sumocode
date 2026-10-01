@@ -40,9 +40,10 @@ describe("judgeChoice", () => {
 		expect(Date.now() - started).toBeLessThan(1_000);
 	});
 
-	it("resolves at once for a zero timeout, even when the transport ignores the signal", async () => {
+	it("resolves instead of throwing for a zero or negative timeout", async () => {
 		const never: ChoiceClassifier = () => new Promise(() => undefined);
 		await expect(judgeChoice(never, { message: "hi" }, question, 0)).resolves.toBeUndefined();
+		await expect(judgeChoice(never, { message: "hi" }, question, -5)).resolves.toBeUndefined();
 	});
 
 	it("bounds the wait even when the transport ignores the abort signal", async () => {

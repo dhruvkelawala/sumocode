@@ -41,7 +41,6 @@ function buildSidebarRows(SIDEBAR_COLS) {
 	rows.push(blank());
 
 	rows.push(cell(`  <span class="fg-accent">\u25c6</span> <span class="fg-fg">${trackOut("CONTEXT")}</span>`));
-	rows.push(cell(`  <span class="fg-dim">\u25a2 ${trackOut("MEMORY")}</span>`));
 	rows.push(blank());
 	rows.push(cell(`  <span class="fg-divider">${rep("\u2501", 26)}</span>`));
 	rows.push(blank());

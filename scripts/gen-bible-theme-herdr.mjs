@@ -12,7 +12,7 @@
 //   - sidebar section headers are untracked with ASCII sigils (> # @ $ %)
 //   - tab markers are ▸ (active) / · (inactive), rules are ─
 //   - palette is the approved v7 green-black set; electric-green focus/body,
-//     amber tool/learning, red approval (no cyan/teal/blue/purple)
+//     amber tool, red approval (no cyan/teal/blue/purple)
 
 import { writeFileSync } from "node:fs";
 import { resolve, dirname } from "node:path";
@@ -40,7 +40,6 @@ const HERDR = {
 	stateThinking: "#39FF14",
 	stateTool: "#FFB000",
 	stateApproval: "#FF706D",
-	stateLearning: "#FFD166",
 };
 
 const rep = (ch, n) => ch.repeat(n);
@@ -65,7 +64,6 @@ function buildSidebarRows() {
 	rows.push(blank());
 
 	rows.push(cell(`  <span class="fg-accent">\u25b8</span> <span class="fg-fg">&gt;  CONTEXT</span>`));
-	rows.push(cell(`  <span class="fg-dim">\u00b7 #  MEMORY</span>`));
 	rows.push(blank());
 	rows.push(cell(`  <span class="fg-divider">${rep("\u2500", 26)}</span>`));
 	rows.push(blank());
@@ -115,7 +113,7 @@ function buildChatHTML(cols) {
 	// The top USER/SUMO exchange mirrors the runtime scenario for a meaningful
 	// runtime-vs-target comparison; the SUMO `extras` below are independent
 	// design intent that exercise the full state palette (idle green, amber
-	// tool, red approval, bright-amber learning) so a reviewer sees every
+	// tool, red approval) so a reviewer sees every
 	// semantic colour in one target. Runtime capture stays minimal (review-only).
 	const messages = [
 		{ role: "USER", body: "review src/auth/session.ts and tighten the return type" },
@@ -249,7 +247,6 @@ function buildScene() {
     --state-thinking:  ${HERDR.stateThinking};
     --state-tool:      ${HERDR.stateTool};
     --state-approval:  ${HERDR.stateApproval};
-    --state-learning:  ${HERDR.stateLearning};
   }
   .scene { display: grid; grid-template-rows: var(--cell-h) var(--cell-h) var(--cell-h) calc(var(--cell-h) * ${middleRows}) var(--cell-h) calc(var(--cell-h) * 3) var(--cell-h) var(--cell-h); }
   .scene .middle { display: grid; grid-template-columns: ${CHAT_COLS}ch ${GUTTER}ch ${SIDEBAR_COLS}ch; grid-row: 4; min-height: 0; overflow: hidden; }

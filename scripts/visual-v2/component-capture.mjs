@@ -164,14 +164,6 @@ async function renderSidebarEditorial(width) {
 			{ name: "context7", status: "idle" },
 			{ name: "chrome-dev", status: "idle" },
 		],
-		memory: [
-			"prefers Scriptorium language",
-			"uses herdr with Ghostty",
-			"keeps UI review evidence",
-		],
-		memoryTotal: 48,
-		memoryUnavailable: false,
-		activeSubTab: "CONTEXT",
 	}, width);
 }
 

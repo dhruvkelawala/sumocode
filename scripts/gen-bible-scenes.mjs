@@ -62,13 +62,6 @@ const scenes = [
 		label: "scene · active + DIVINE QUERY overlay · 160×45",
 		blurb: "DIVINE QUERY (Pi ask/confirm) centered over active scene. user picks via arrow keys + Enter.",
 	},
-	{
-		filename: "scene-memory-scriptorium-overlay.html",
-		base: "scene-active.html",
-		modal: "07-memory-editor.html",
-		label: "scene · active + MEMORY SCRIPTORIUM overlay · 160×45",
-		blurb: "Memory Scriptorium opened from active chat. Tests the six-panel memory editor over the full Cathedral shell.",
-	},
 ];
 
 for (const s of scenes) {

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Element 1 — Sidebar DESIGN EXPLORATIONS (CANONICAL V2 EDITORIAL — magazine display, tracked-out masthead.
-// 6 mockups: CONTEXT / MEMORY / over-budget / empty / down / metrics.
+// 3 mockups: context / over-budget / metrics.
 
 import { writeFileSync } from "node:fs";
 import { resolve, dirname } from "node:path";
@@ -43,19 +43,6 @@ const standardCtx = {
 
 const overCtx = { ...standardCtx, ctxTokens: "3.4M", ctxWindow: "1.0M", overBudget: true };
 
-const standardMem = {
-	facts: [
-		"prefers TS strict",
-		"pnpm not npm",
-		"based London \u00b7 BST",
-		"BigCo \u2192 main-app",
-		"imperative commits",
-	],
-	totalCount: 53,
-};
-const emptyMem = { facts: [], totalCount: 0, empty: true };
-const downMem = { facts: [], totalCount: 0, daemonDown: true };
-
 // ═════════════════════════════════════════════════════════════════════════
 // V2 — EDITORIAL / MAGAZINE
 // ═════════════════════════════════════════════════════════════════════════
@@ -67,14 +54,9 @@ const v2 = {
 			blank(),
 		];
 	},
-	tabs(active) {
+	tabs() {
 		return [
-			row(active === "CONTEXT"
-				? `  <span class="fg-accent">\u25c6</span> <span class="fg-fg">${trackOut("CONTEXT")}</span>`
-				: `  <span class="fg-dim">\u25a2 ${trackOut("CONTEXT")}</span>`),
-			row(active === "MEMORY"
-				? `  <span class="fg-accent">\u25c6</span> <span class="fg-fg">${trackOut("MEMORY")}</span>`
-				: `  <span class="fg-dim">\u25a2 ${trackOut("MEMORY")}</span>`),
+			row(`  <span class="fg-accent">\u25c6</span> <span class="fg-fg">${trackOut("CONTEXT")}</span>`),
 			blank(),
 			row(`  <span class="fg-divider">${rep("\u2501", 26)}</span>`),
 			blank(),
@@ -114,31 +96,6 @@ const v2 = {
 		}
 		return rows;
 	},
-	memory(spec) {
-		const rows = [];
-		rows.push(row(`  <span class="fg-dim">${trackOut("MEMORY")}</span>`));
-		rows.push(blank());
-		if (spec.daemonDown) {
-			rows.push(row(`  <span class="fg-dim">memory unavailable</span>`));
-			return rows;
-		}
-		if (spec.empty || spec.facts.length === 0) {
-			rows.push(row(`  <span class="fg-dim">no memory match</span>`));
-			return rows;
-		}
-		for (const f of spec.facts) {
-			const max = COLS - 4;
-			const t = f.length > max ? f.slice(0, max - 1) + "\u2026" : f;
-			rows.push(row(`  <span class="fg-accent">\u2767</span> <span class="fg-fg">${t}</span>`));
-		}
-		const more = spec.totalCount - spec.facts.length;
-		if (more > 0) {
-			rows.push(blank());
-			rows.push(row(`  <span class="fg-divider">${rep("\u2501", 26)}</span>`));
-			rows.push(row(`  <span class="fg-dim">${more} more \u00b7 \u2318M</span>`));
-		}
-		return rows;
-	},
 	metrics({ cpu, mem, fps }) {
 		const rows = [];
 		rows.push(blank());
@@ -158,11 +115,11 @@ const v2 = {
 
 // ─── compose sidebar ────────────────────────────────────────────────────
 function buildSidebar(variant, spec) {
-	const { activeTab, contextSpec, memorySpec, metrics } = spec;
+	const { contextSpec, metrics } = spec;
 	const rows = [
 		...variant.chrome(),
-		...variant.tabs(activeTab),
-		...(activeTab === "CONTEXT" ? variant.context(contextSpec) : variant.memory(memorySpec)),
+		...variant.tabs(),
+		...variant.context(contextSpec),
 		...(metrics ? variant.metrics(metrics) : []),
 	];
 	return rows;
@@ -195,12 +152,9 @@ function htmlPage({ title, label, blurb, gridRows }) {
 
 // ─── variant × state matrix ─────────────────────────────────────────────
 const states = [
-	{ suffix: "context",          spec: { activeTab: "CONTEXT", contextSpec: standardCtx }, blurb: "CONTEXT active, standard token state." },
-	{ suffix: "memory",           spec: { activeTab: "MEMORY",  memorySpec: standardMem  }, blurb: "MEMORY active, 5 facts + 48 more · ⌘M overflow." },
-	{ suffix: "context-over-budget",     spec: { activeTab: "CONTEXT", contextSpec: overCtx     }, blurb: "CONTEXT over-budget. bar fills + OVER badge in approval color." },
-	{ suffix: "memory-empty",     spec: { activeTab: "MEMORY",  memorySpec: emptyMem     }, blurb: "MEMORY active but no facts yet." },
-	{ suffix: "memory-daemon-down",      spec: { activeTab: "MEMORY",  memorySpec: downMem      }, blurb: "Remnic daemon offline." },
-	{ suffix: "with-metrics",          spec: { activeTab: "CONTEXT", contextSpec: standardCtx, metrics: { cpu: 16, mem: "414M", fps: 0 } }, blurb: "/metrics on — htop sparklines below." },
+	{ suffix: "context",          spec: { contextSpec: standardCtx }, blurb: "CONTEXT active, standard token state." },
+	{ suffix: "context-over-budget",     spec: { contextSpec: overCtx }, blurb: "CONTEXT over-budget. bar fills + OVER badge in approval color." },
+	{ suffix: "with-metrics",          spec: { contextSpec: standardCtx, metrics: { cpu: 16, mem: "414M", fps: 0 } }, blurb: "/metrics on — htop sparklines below." },
 ];
 
 const variants = [

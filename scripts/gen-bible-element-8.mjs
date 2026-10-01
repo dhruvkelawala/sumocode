@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Element 8 — Command palette (Ctrl+/).
-// 6 modes: SESSION / MODEL / THINKING / MEMORY / THEME / SETTINGS.
+// 5 modes: SESSION / MODEL / THINKING / THEME / SETTINGS.
 // Drill-down on Enter. Selected row in accent fill.
 
 import { writeFileSync } from "node:fs";
@@ -29,7 +29,6 @@ const MODES = [
 	{ key: "SESSION",  arrow: "▶", value: "CURRENT: auth-flow-refactor" },
 	{ key: "MODEL",    arrow: "▶", value: "CURRENT: claude-opus-4-7" },
 	{ key: "THINKING", arrow: "▶", value: "CURRENT: xhigh" },
-	{ key: "MEMORY",   arrow: "▶", value: "55 FACTS" },
 	{ key: "THEME",    arrow: "▶", value: "CURRENT: cathedral" },
 	{ key: "SETTINGS", arrow: "",  value: "" },
 ];
@@ -119,22 +118,22 @@ const variants = [
 		filename: "08-palette-default.html",
 		title: "Bible · Element 8 · Command palette · MODEL focused",
 		label: "element 8 · command palette · default open · 80 cols",
-		blurb: "Ctrl+/ palette. 6 mode rows. MODEL focused (most common second-level action). search input above.",
+		blurb: "Ctrl+/ palette. 5 mode rows. MODEL focused (most common second-level action). search input above.",
 		spec: { search: "", selectedIdx: 1 },
 	},
 	{
 		filename: "08-palette-search.html",
 		title: "Bible · Element 8 · Command palette · search filter",
 		label: "element 8 · command palette · with search filter · 80 cols",
-		blurb: "user typed 'mem' — only MEMORY matches. selected via fuzzy filter.",
-		spec: { search: "mem", selectedIdx: 3 },
+		blurb: "user typed 'thin' — THINKING is the intended destination.",
+		spec: { search: "thin", selectedIdx: 2 },
 	},
 	{
 		filename: "08-palette-settings.html",
 		title: "Bible · Element 8 · Command palette · SETTINGS focused",
 		label: "element 8 · command palette · SETTINGS focused · 80 cols",
 		blurb: "last mode focused. demonstrates row without value/arrow.",
-		spec: { search: "", selectedIdx: 5 },
+		spec: { search: "", selectedIdx: 4 },
 	},
 ];
 

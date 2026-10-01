@@ -31,7 +31,6 @@ const generators = [
 	"scripts/gen-bible-element-4.mjs",
 	"scripts/gen-bible-element-5.mjs",
 	"scripts/gen-bible-element-6.mjs",
-	"scripts/gen-bible-element-7.mjs",
 	"scripts/gen-bible-element-8.mjs",
 	"scripts/gen-bible-element-8-explorations.mjs",
 	"scripts/gen-bible-element-9.mjs",

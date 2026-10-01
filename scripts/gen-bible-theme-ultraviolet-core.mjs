@@ -30,7 +30,6 @@ const UV = {
 	stateThinking: "#B974FF",
 	stateTool: "#FFC857",
 	stateApproval: "#FF668F",
-	stateLearning: "#75E8FF",
 	toolSurface: "#100A1D",
 	toolBorder: "#56347A",
 	toolLabel: "#B974FF",
@@ -68,7 +67,6 @@ function buildSidebarRows() {
 	rows.push(cell(`  <span class="fg-accent"># REGISTRY</span>`));
 	rows.push(blank());
 	rows.push(cell(`  <span class="fg-accent">&gt;</span> <span class="fg-fg">&gt; CONTEXT</span>`));
-	rows.push(cell(`  <span class="fg-dim">. + MEMORY</span>`));
 	rows.push(blank());
 	rows.push(cell(`  <span class="fg-divider">${rep("─", 26)}</span>`));
 	rows.push(blank());
@@ -248,7 +246,7 @@ function buildScene(kind, title) {
   :root {
     --background: ${UV.background}; --surface: ${UV.surface}; --surface-recess: ${UV.surfaceRecess}; --surface-lifted: ${UV.surfaceLifted};
     --divider: ${UV.divider}; --foreground: ${UV.foreground}; --foreground-dim: ${UV.foregroundDim}; --accent: ${UV.accent};
-    --state-idle: ${UV.stateIdle}; --state-thinking: ${UV.stateThinking}; --state-tool: ${UV.stateTool}; --state-approval: ${UV.stateApproval}; --state-learning: ${UV.stateLearning};
+    --state-idle: ${UV.stateIdle}; --state-thinking: ${UV.stateThinking}; --state-tool: ${UV.stateTool}; --state-approval: ${UV.stateApproval};
     --syntax-keyword: ${UV.codeKeyword}; --syntax-string: ${UV.codeString}; --syntax-number: ${UV.codeNumber}; --syntax-comment: ${UV.codeComment}; --syntax-function: ${UV.codeFunction};
     --tool-ledger-surface: ${UV.toolSurface}; --tool-ledger-border: ${UV.toolBorder}; --tool-ledger-label: ${UV.toolLabel}; --tool-ledger-target: ${UV.toolTarget}; --tool-ledger-body: ${UV.toolBody}; --tool-ledger-muted: ${UV.toolMuted};
     --code-surface: ${UV.codeSurface}; --code-border: ${UV.codeBorder}; --code-foreground: ${UV.codeForeground}; --code-gutter: ${UV.codeGutter}; --code-comment: ${UV.codeComment}; --code-keyword: ${UV.codeKeyword}; --code-string: ${UV.codeString}; --code-number: ${UV.codeNumber}; --code-function: ${UV.codeFunction};

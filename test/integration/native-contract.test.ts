@@ -66,8 +66,14 @@ const tempRoots: string[] = [];
 
 function tempRoot(prefix: string): string {
 	const root = mkdtempSync(join(tmpdir(), prefix));
+	chmodSync(root, 0o700);
 	tempRoots.push(root);
 	return root;
+}
+
+function nativeSpawnEnv(overrides?: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+	const agentDir = tempRoot("sumocode-native-agent-");
+	return buildSpawnEnv(process.env, { PI_BIN: "", ...overrides }, { agentDir, roots: tempRoots });
 }
 
 function matches(output: string, pattern: string | RegExp): boolean {
@@ -84,7 +90,7 @@ function spawnNativePty(
 	args: readonly string[],
 	options: { readonly env?: NodeJS.ProcessEnv; readonly cwd?: string; readonly cols?: number; readonly rows?: number } = {},
 ): NativePtySession {
-	const childEnv = buildSpawnEnv(process.env, { PI_BIN: "", ...options.env });
+	const childEnv = nativeSpawnEnv(options.env);
 	const cols = options.cols ?? 100;
 	const rows = options.rows ?? 30;
 	const evidence = createChildEvidenceContext([NATIVE_BIN, ...args], childEnv);
@@ -162,7 +168,7 @@ async function waitForExit(session: NativePtySession, timeoutMs = 15_000): Promi
 function runNative(args: readonly string[], options: { readonly input?: string; readonly env?: NodeJS.ProcessEnv; readonly cwd?: string } = {}) {
 	return spawnSync(NATIVE_BIN, [...args], {
 		cwd: options.cwd ?? tempRoot("sumocode-native-command-"),
-		env: buildSpawnEnv(process.env, { PI_BIN: "", ...options.env }),
+		env: nativeSpawnEnv(options.env),
 		input: options.input ?? "",
 		encoding: "utf8",
 		timeout: 30_000,
@@ -330,7 +336,7 @@ nativeDescribe("native executable contract", () => {
 		expect(readFileSync(NATIVE_PI).includes("bedrock-provider")).toBe(false);
 		expect(readFileSync(join(ROOT, "node_modules/@earendil-works/pi-coding-agent/dist/bun/runtime-setup.js"), "utf8")).toContain("setBedrockProviderModule(bedrockProviderModule)");
 		expect(runNative(["--version"]).stdout).toContain(`sumocode ${PACKAGE_VERSION}`);
-		expect(spawnSync(NATIVE_PI, ["--version"], { encoding: "utf8" }).stdout.trim()).toBe("0.99.1");
+		expect(spawnSync(NATIVE_PI, ["--version"], { env: nativeSpawnEnv(), encoding: "utf8" }).stdout.trim()).toBe("0.99.1");
 	});
 
 	it.runIf(process.platform === "darwin")("ships macOS executables with a valid code signature", () => {
@@ -362,7 +368,7 @@ nativeDescribe("native executable contract", () => {
 		const alias = join(prefix, "bin", "sc");
 		expect(realpathSync(alias)).toBe(realpathSync(installed));
 		for (const binary of [installed, alias]) {
-			const version = spawnSync(binary, ["--version"], { encoding: "utf8" });
+			const version = spawnSync(binary, ["--version"], { env: nativeSpawnEnv(), encoding: "utf8" });
 			expect(version.status).toBe(0);
 			expect(version.stdout).toContain(`sumocode ${PACKAGE_VERSION}`);
 		}
@@ -559,6 +565,9 @@ nativeDescribe("native executable contract", () => {
 			SUMOCODE_LAUNCHER: NATIVE_BIN,
 			SUMOCODE_RPC_CHILD: "1",
 			PI_CODING_AGENT_DIR: join(root, "agent"),
+			SUMOCODE_STATE_DIR: join(root, "state"),
+			SUMOCODE_CONFIG_DIR: join(root, "config"),
+			SUMO_TUI_DIAG_FILE: join(root, "diagnostics.jsonl"),
 			TMPDIR: root,
 			PROVENANCE_TASK_LOG: taskLog,
 			HERDR_ENV: "1",

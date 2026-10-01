@@ -1,7 +1,7 @@
-import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { appendFileSync, chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import xterm from "@xterm/headless";
 import { spawn, type IPty } from "node-pty";
 import {
@@ -199,12 +199,54 @@ const CHILD_ENV_ALLOWLIST = new Set([
 	"SUMOCODE_INTEGRATION_PACKAGE_ROOT",
 ]);
 
+// Only native fixtures opt into this policy; existing integration env semantics stay intact.
+const NATIVE_FIXTURE_WRITE_PATHS = [
+	"PI_CODING_AGENT_DIR", "SUMOCODE_STATE_DIR", "SUMOCODE_CONFIG_DIR", "SUMO_TUI_DIAG_FILE",
+	"TMPDIR", "NODE_COMPILE_CACHE", "SUMOCODE_TERMINAL_INDEX_GATE",
+	"SUMOCODE_INTEGRATION_RUN_ROOT", "SUMOCODE_INTEGRATION_MANIFEST",
+	"SUMOCODE_TASK_RESPONSE_FILE", "SUMOCODE_TASK_EXIT_FILE", "SUMOCODE_TASK_STARTED_FILE",
+	"SUMOCODE_TASK_DIAG_FILE", "SUMOCODE_TASK_CONTROL_DIR", "SUMOCODE_EXIT_CODE_FILE",
+	"SUMOCODE_RELOAD_READY_FILE", "SUMOCODE_INITIAL_PROMPT_FILE",
+] as const;
+
+function assertNativeFixturePath(key: string, path: string, roots: readonly string[]): void {
+	if (!path.trim() || path.includes("\0") || !isAbsolute(path)) throw new Error(`native fixture ${key} requires an absolute owned path`);
+	// Normalizing '..' before following a symlink can hide an outside-root destination.
+	if (path.split(sep).includes("..")) throw new Error(`native fixture ${key} contains traversal`);
+	// Resolve existing ancestors too: lexical containment alone accepts symlink escapes.
+	let ancestor = resolve(path);
+	for (;;) {
+		try {
+			lstatSync(ancestor);
+			break;
+		} catch (error) {
+			// SAFETY: only a nonexistent ancestor may be skipped; other fs errors fail closed.
+			if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+			ancestor = dirname(ancestor);
+		}
+	}
+	let canonical: string;
+	try {
+		canonical = resolve(realpathSync(ancestor), relative(ancestor, resolve(path)));
+	} catch {
+		throw new Error(`native fixture ${key} has an unresolved ancestor`);
+	}
+	if (!roots.some((root) => {
+		const remainder = relative(realpathSync(root), canonical);
+		return remainder !== ".." && !remainder.startsWith(`..${sep}`) && !isAbsolute(remainder);
+	})) throw new Error(`native fixture ${key} is outside owned roots`);
+}
+
 /**
  * Constructs test-child environments from a small allowlist, then applies
  * explicit synthetic overrides. Run-scoped cache and temp paths are pinned
  * last so neither the developer shell nor a test can escape the namespace.
  */
-export function buildSpawnEnv(parent: NodeJS.ProcessEnv, overrides: NodeJS.ProcessEnv | undefined): NodeJS.ProcessEnv {
+export function buildSpawnEnv(
+	parent: NodeJS.ProcessEnv,
+	overrides: NodeJS.ProcessEnv | undefined,
+	nativeFixture?: { readonly agentDir: string; readonly roots: readonly string[] },
+): NodeJS.ProcessEnv {
 	const allowed: NodeJS.ProcessEnv = {};
 	for (const [key, value] of Object.entries(parent)) {
 		if (value !== undefined && CHILD_ENV_ALLOWLIST.has(key) && !isCredentialEnvKey(key)) allowed[key] = value;
@@ -226,6 +268,16 @@ export function buildSpawnEnv(parent: NodeJS.ProcessEnv, overrides: NodeJS.Proce
 		env.TMPDIR = tempRoot;
 		env.NODE_COMPILE_CACHE = compileCache;
 		delete env.NODE_PATH;
+	}
+	if (nativeFixture !== undefined) {
+		env.PI_CODING_AGENT_DIR ??= nativeFixture.agentDir;
+		env.SUMO_TUI_DIAG_FILE ??= join(nativeFixture.agentDir, "diagnostics.jsonl");
+		env.TMPDIR ??= nativeFixture.agentDir;
+		const roots = [...nativeFixture.roots, ...(runRoot === undefined ? [] : [runRoot])];
+		for (const key of NATIVE_FIXTURE_WRITE_PATHS) {
+			const path = env[key];
+			if (path !== undefined) assertNativeFixturePath(key, path, roots);
+		}
 	}
 	return env;
 }

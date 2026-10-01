@@ -122,6 +122,16 @@ Read `docs/PI_TOOL_ARCHITECTURE.md` before adding, overriding, or intercepting t
 - **Approval policy**: [Plan 076](plans/076-disable-approval-gate.md) retired active approval installation/registration. Dormant approval modules and tests remain; external Pi/operator trust policy owns approval. Do not wire them back into the runtime.
 - **MCP grants to children**: MCP is not a Pi built-in — `mcp` is registered by the third-party `pi-mcp-adapter` extension, so a child receives it only when the adapter and SumoCode's child-side guard both resolve. The gateway is inherited when the session has `mcp` active and the child can already start a subprocess, or when a role asks for it by name; a role opts out with `mcpServers: []`, and a non-empty `mcpServers` list switches to the fenced scope that writes a private per-child config and refuses any project config it cannot bound — including a repository redefining a name this session defines globally. Ambient grants deliberately read the child cwd's own chain, project files included (accepted risk, [#569](https://github.com/dhruvkelawala/sumocode/pull/569)); the adapter itself always resolves from the trusted global scope. See `src/subagents/mcp-capability.ts`.
 
+## Effect adoption boundary
+
+Effect is approved only for bounded future adoption; it is not installed until the first production adopter adds an exact pin to `package.json`. Before Effect work, read the vendored `.agents/skills/effect-ts/` and `.agents/skills/effect/` guidance, but this project boundary overrides their generic setup defaults. Once pinned, read `node_modules/effect/AGENTS.md` and the relevant package source completely; the pinned package wins over skills and historical research.
+
+- Allowed: in-memory subagent and terminal lifecycles, the RPC host core behind existing plain interfaces, typed errors, trust-boundary schemas, and tests for an adopted subject.
+- Never: launcher/pre-adoption execution, render execution, durable stores and locks, process-identity primitives, byte framing, or a new platform process/filesystem owner. Keep `src/native/main.ts`, `src/sumo-tui/rpc/spawn-child.mjs`, `sumo-rpc-host.js`, `src/child-protocol.ts`, `src/{cathedral,themes}/**`, `src/{footer,top-chrome}.ts`, `src/sumo-tui/{render,transcript,widgets,layout,input,cathedral}/**`, and `src/sumo-tui/pi-compat/tree-navigation-command.ts` plain TypeScript.
+- Import deep subpaths such as `effect/Effect`; never the `effect` root barrel or an `@effect/platform-*` root barrel. Testing modules stay in tests. Production `effect/unstable/*` needs explicit issue approval, a project-owned interface, and a documented lint suppression.
+- Do not rewrite launcher/readiness `process.env` reads to `Config`, replace durable caches or locks with Effect stores, default to `Schema.Class`, or validate inside per-line/per-cell loops. Schema is for actual trust boundaries.
+- No Effect type crosses a Pi tool/event/TUI/`TerminalHost` boundary. Create runtimes, services, errors, and teardown only with their first consumer; supervised failures must use the existing diagnostic seam.
+
 ## Cathedral rendering
 
 `src/cathedral/` and `src/sumo-tui/cathedral/` hold Cathedral-themed adapters and retained UI nodes. The visual canon is:

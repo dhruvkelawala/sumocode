@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { once } from "node:events";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -1145,6 +1145,427 @@ describe("verified harness group cleanup", () => {
 	});
 });
 
+describe("canonical census hardening", () => {
+	const auth = { runId: "canonical-run", signingKey: "canonical-key" };
+	const ownerToken = "canonical-owner";
+	const registration = {
+		pid: 60_001, pgid: 60_001, processStart: "leader-start",
+		ownerPid: 59_001, ownerProcessStart: "owner-start",
+	};
+
+	function spawnEvent(tuple = registration, runId = auth.runId) {
+		return { event: "spawn", ...tuple, runId,
+			registrationHmac: signSpawnRegistration(tuple, runId, auth.signingKey) };
+	}
+
+	it.each(["space", "tab", "newline-space", "spawn-space", "empty", "complete blank lines"])(
+		"does not forgive unterminated whitespace in the public census or audit: %s", async (kind) => {
+			const manifest = join(createRunRoot(), "children.jsonl");
+			const signed = kind === "spawn-space";
+			const complete = kind === "empty" || kind === "complete blank lines";
+			writeFileSync(manifest, signed ? `${JSON.stringify(spawnEvent())}\n `
+				: kind === "tab" ? "\t" : kind === "newline-space" ? "\n "
+					: kind === "empty" ? "" : kind === "complete blank lines" ? " \n\t\n\n" : " ");
+			const census = await manifestProcessGroups(manifest, ownerToken, auth);
+			expect(census.groups.map((group) => group.pid)).toEqual(signed ? [60_001] : []);
+			if (complete) expect(census.failures).toEqual([]);
+			else expect(census.failures).toContainEqual(expect.stringContaining("manifest torn line"));
+			const signals: Array<[number, string]> = [];
+			let scans = 0;
+			await expect(auditAndReap(manifest, ownerToken, auth, {
+				readProcessTable: () => { scans++; return { rows: [] }; }, readProcessStart: () => undefined, currentPgid: 99_999,
+				kill: (pid, signal) => { signals.push([pid, String(signal)]); return true; }, wait: async () => {},
+			})).resolves.toBe(complete);
+			expect(signals).toEqual([]);
+			expect(scans).toBe(signed ? 1 : 0);
+		});
+
+	it.each(["missing", "directory", "symlink"])("names %s census read loss without leaking contents", async (kind) => {
+		const root = createRunRoot();
+		const manifest = join(root, "children.jsonl");
+		if (kind === "directory") mkdirSync(manifest);
+		if (kind === "symlink") {
+			writeFileSync(join(root, "secret"), "private-census-secret");
+			symlinkSync(join(root, "secret"), manifest);
+		}
+		const census = await manifestProcessGroups(manifest, ownerToken, auth);
+		expect(census.groups).toEqual([]);
+		expect(census.failures).not.toEqual([]);
+		expect(JSON.stringify(census)).not.toContain("private-census-secret");
+		expect(Object.keys(census).sort()).toEqual(["failures", "groups"]);
+	});
+
+	it.each([
+		{ pid: 1 }, { pgid: 1 }, { ownerPid: 1 }, { ownerPid: 60_001 },
+		{ processStart: "" }, { ownerProcessStart: "" }, { ownerProcessStart: undefined },
+		{ pid: 60_001.5 }, { ownerPid: "59_001" },
+	])("rejects signed incomplete or unsafe spawn identity %j", async (invalid) => {
+		const manifest = join(createRunRoot(), "children.jsonl");
+		const tuple = { ...registration, ...invalid };
+		writeFileSync(manifest, `${JSON.stringify({ event: "spawn", ...tuple, runId: auth.runId,
+			registrationHmac: signSpawnRegistration(tuple, auth.runId, auth.signingKey) })}\n`);
+		const census = await manifestProcessGroups(manifest, ownerToken, auth);
+		expect(census.groups).toEqual([]);
+		expect(census.failures).toEqual([expect.stringContaining("spawn identity")]);
+	});
+
+	it("coalesces only exact authority tuples and keeps signed conflicts despite later records", async () => {
+		const manifest = join(createRunRoot(), "children.jsonl");
+		const valid = spawnEvent();
+		const conflict = spawnEvent({ ...registration, processStart: "other-birth" });
+		const invalid = [null, [], {}, 42, { event: "alien", pid: 60_001, pgid: 60_001 },
+			spawnEvent(registration, "foreign-run"), { ...valid, registrationHmac: "0".repeat(64) }];
+		writeFileSync(manifest, [valid, valid, ...invalid, conflict, valid].map((event) => JSON.stringify(event)).join("\n") + "\nprivate-parse-secret\n{\"event\":");
+		const census = await manifestProcessGroups(manifest, ownerToken, auth);
+		expect(census.groups.map((group) => group.processStart)).toEqual(["leader-start", "other-birth"]);
+		expect(census.failures).toContain("manifest conflicting pgid registrations");
+		expect(census.failures).toHaveLength(11);
+		expect(JSON.stringify(census.failures)).not.toContain("private-parse-secret");
+	});
+
+	it.each(["wait throw", "table throw", "reaped", "invalid record", "audit record"])("keeps later authorized cleanup non-green after %s", async (kind) => {
+		const root = createRunRoot();
+		const manifest = join(root, "children.jsonl");
+		const second = { ...registration, pid: 60_002, pgid: 60_002 };
+		writeFileSync(manifest, [spawnEvent(), spawnEvent(second)].map((event) => JSON.stringify(event)).join("\n") + "\n"
+			+ (kind === "invalid record" ? "null\n" : ""));
+		if (kind === "audit record") writeFileSync(join(root, "audit-failures.jsonl"), "null\n");
+		const signals: Array<[number, string]> = [];
+		let scans = 0;
+		let signaled = 0;
+		let waits = 0;
+		const owner = { pid: 59_001, ppid: 1, pgid: 59_001, start: "owner-start",
+			command: `${HARNESS_SIGNATURE_ENV_KEY}=${HARNESS_SIGNATURE} ${HARNESS_OWNER_TOKEN_ENV_KEY}=${ownerToken} node worker` };
+		const result = await auditAndReap(manifest, ownerToken, auth, {
+			readProcessTable: () => {
+				scans++;
+				if (kind === "table throw" && scans === 1) throw new Error("private-table-secret");
+				if (kind === "wait throw" || kind === "table throw") return signaled === -60_002 ? { rows: [] } : { rows: [owner,
+					{ pid: scans === 1 ? 60_001 : 60_002, ppid: owner.pid, pgid: scans === 1 ? 60_001 : 60_002, start: "leader-start", command: "pi" }] };
+				if (kind === "reaped") return { rows: scans % 2 === 1 ? [owner,
+					{ pid: scans === 1 ? 60_001 : 60_002, ppid: owner.pid, pgid: scans === 1 ? 60_001 : 60_002, start: "leader-start", command: "pi" }] : [] };
+				return { rows: [] };
+			}, currentPgid: 99_999, readProcessStart: () => undefined,
+			kill: (pid, signal) => { signaled = pid; signals.push([pid, String(signal)]); return true; },
+			wait: async () => { if (kind === "wait throw" && ++waits === 1) throw new Error("private-wait-secret"); },
+		});
+		expect(result).toBe(false);
+		if (kind === "wait throw" || kind === "reaped") expect(signals).toEqual([[-60_001, "SIGTERM"], [-60_002, "SIGTERM"]]);
+		else if (kind === "table throw") expect(signals).toEqual([[-60_002, "SIGTERM"]]);
+		else expect(signals).toEqual([]);
+	});
+
+	it.each(["append", "replace", "truncate", "torn completion", "identical inode replacement", "cross-snapshot conflict", "loss"])(
+		"parses all of observation B and preserves cleanup evidence after %s", async (kind) => {
+			const root = createRunRoot();
+			const manifest = join(root, "children.jsonl");
+			const first = `${JSON.stringify(spawnEvent())}\n`;
+			const second = `${JSON.stringify(spawnEvent({ ...registration, pid: 60_002, pgid: 60_002 }))}\n`;
+			writeFileSync(manifest, first + (kind === "torn completion" ? second.slice(0, 40) : ""));
+			let scans = 0;
+			let changed = false;
+			const result = await auditAndReap(manifest, ownerToken, auth, {
+				readProcessTable: () => {
+					scans++;
+					if (!changed) {
+						changed = true;
+						if (kind === "replace" || kind === "identical inode replacement") {
+							writeFileSync(join(root, "replacement"), kind === "replace" ? second : first);
+							renameSync(join(root, "replacement"), manifest);
+						} else if (kind === "loss") rmSync(manifest);
+						else if (kind === "truncate") writeFileSync(manifest, second);
+						else if (kind === "cross-snapshot conflict") writeFileSync(manifest, `${JSON.stringify(spawnEvent({ ...registration, processStart: "other-birth" }))}\n`);
+						else writeFileSync(manifest, first + second);
+					}
+					return { rows: [] };
+				}, currentPgid: 99_999, readProcessStart: () => undefined,
+				kill: () => { throw new Error("empty table must not signal"); }, wait: async () => {},
+			});
+			expect(result).toBe(false);
+			expect(scans).toBe(kind === "loss" || kind === "identical inode replacement" ? 1 : 2);
+		});
+
+	it("cleans a newly signed B group despite a torn A and keeps A results", async () => {
+		const manifest = join(createRunRoot(), "children.jsonl");
+		const first = `${JSON.stringify(spawnEvent())}\n`;
+		const second = { ...registration, pid: 60_002, pgid: 60_002 };
+		writeFileSync(manifest, first + "{\"event\":");
+		let scans = 0;
+		let reaped = false;
+		const signals: number[] = [];
+		await expect(auditAndReap(manifest, ownerToken, auth, {
+			readProcessTable: () => {
+				if (++scans === 1) { writeFileSync(manifest, `${JSON.stringify(spawnEvent(second))}\n`); return { rows: [] }; }
+				return { rows: reaped ? [] : [
+					{ pid: 59_001, ppid: 1, pgid: 59_001, start: "owner-start", command: `${HARNESS_SIGNATURE_ENV_KEY}=${HARNESS_SIGNATURE} ${HARNESS_OWNER_TOKEN_ENV_KEY}=${ownerToken}` },
+					{ pid: 60_002, ppid: 59_001, pgid: 60_002, start: "leader-start", command: "pi" },
+				] };
+			}, currentPgid: 99_999, readProcessStart: () => undefined,
+			kill: (pid) => { signals.push(pid); reaped = true; return true; }, wait: async () => {},
+		})).resolves.toBe(false);
+		expect(signals).toEqual([-60_002]);
+		expect(scans).toBe(3);
+	});
+
+	it("reports stable empty observations as registered-only, without signals", async () => {
+		const manifest = join(createRunRoot(), "children.jsonl");
+		writeFileSync(manifest, "");
+		await expect(auditAndReap(manifest, ownerToken, auth, {
+			readProcessTable: () => { throw new Error("no registered groups"); }, currentPgid: 99_999,
+			readProcessStart: () => undefined, kill: () => { throw new Error("no signals"); }, wait: async () => {},
+		})).resolves.toBe(true);
+	});
+
+	it("rejects a correctly signed missing birth before an empty table can green it", async () => {
+		const manifest = join(createRunRoot(), "children.jsonl");
+		const incomplete = { ...registration, processStart: undefined };
+		writeFileSync(manifest, `${JSON.stringify({ event: "spawn", ...incomplete, runId: auth.runId,
+			registrationHmac: signSpawnRegistration(incomplete, auth.runId, auth.signingKey) })}\n`);
+		const census = await manifestProcessGroups(manifest, ownerToken, auth);
+		expect(census).toEqual({ groups: [], failures: [expect.stringContaining("spawn identity")] });
+		const signals: string[] = [];
+		await expect(auditAndReap(manifest, ownerToken, auth, {
+			readProcessTable: () => ({ rows: [] }), currentPgid: 99_999,
+			readProcessStart: () => undefined,
+			kill: (_pid, signal) => { signals.push(String(signal)); return true; }, wait: async () => {},
+		})).resolves.toBe(false);
+		expect(signals).toEqual([]);
+	});
+});
+
+describe("canonical preflight read loss", () => {
+	const deadPid = 2_147_483_647;
+	const owner = { pid: deadPid, runId: "postmortem-run", ownerToken: "postmortem-owner" };
+	const spawn = { event: "spawn", pid: 60_001, pgid: 60_001, processStart: "leader-start",
+		ownerPid: 59_001, ownerProcessStart: "worker-start", runId: owner.runId, registrationHmac: "a".repeat(64) };
+
+	it.each(["valid then null", "null then valid", "malformed", "torn", "foreign", "conflict", "exact duplicate", "wellformed"])(
+		"retains every human-only exclusion through inspect and fix: %s", async (kind) => {
+			const root = createRunRoot();
+			mkdirSync(join(root, "node_modules"));
+			const namespace = join(root, "sumocode-harness-v2-run-partial-manual");
+			mkdirSync(namespace);
+			writeFileSync(join(namespace, "owner.json"), JSON.stringify(owner));
+			const second = { ...spawn, pid: 60_002, pgid: 60_001, processStart: "second-start" };
+			const independent = { ...spawn, pid: 61_001, pgid: 61_001, processStart: "independent-start" };
+			const valid = `${JSON.stringify(spawn)}\n`;
+			const later = `${JSON.stringify(independent)}\n`;
+			const bad = kind === "foreign" ? `${JSON.stringify({ ...spawn, runId: "foreign" })}\n`
+				: kind === "malformed" ? "private-parse-secret\n" : "null\n";
+			writeFileSync(join(namespace, "children.jsonl"), kind === "null then valid" ? bad + valid + later
+				: kind === "torn" ? valid + later + "{\"event\":"
+					: kind === "conflict" ? valid + `${JSON.stringify(second)}\n` + later + valid
+						: kind === "exact duplicate" ? valid + valid + later
+							: kind === "wellformed" ? valid + later : valid + bad + later);
+			const command = `${HARNESS_SIGNATURE_ENV_KEY}=${HARNESS_SIGNATURE} node survivor`;
+			const rows = [
+				{ pid: spawn.pid, ppid: 1, pgid: spawn.pgid, start: spawn.processStart, command },
+				{ pid: independent.pid, ppid: 1, pgid: independent.pgid, start: independent.processStart, command },
+				...(kind === "conflict" ? [{ pid: second.pid, ppid: 1, pgid: second.pgid, start: second.processStart, command }] : []),
+			];
+			const report = await inspectIntegrationPreflight({ root, tempRoot: root, rows, env: {} });
+			const expectedPids = kind === "conflict" ? [60_001, 60_002, 61_001] : [60_001, 61_001];
+			expect(report.issues.find((issue) => issue.code === "orphan-harness-children")?.registeredSurvivors
+				.map((group) => group.pid).sort((a, b) => a - b)).toEqual(expectedPids);
+			const unknown = !["wellformed", "exact duplicate"].includes(kind);
+			expect(report.issues.some((issue) => issue.code === "harness-census-unverified")).toBe(unknown);
+			expect(JSON.stringify(report)).not.toContain("private-parse-secret");
+			const signals: Array<[number, string]> = [];
+			const result = await fixIntegrationPreflight(report, { table: { rows }, rows, readRows: () => rows, currentPgid: 99_999,
+				kill: (pid, signal) => { signals.push([pid, String(signal)]); return true; }, wait: async () => {},
+			});
+			expect(signals).toEqual([]);
+			if (unknown) {
+				expect(result).toMatchObject({ refused: true, issues: [expect.objectContaining({ code: "harness-census-unverified" })] });
+				expect(existsSync(namespace)).toBe(true);
+			}
+		});
+
+	it.each(["wellformed", "unknown"])("protects a %s manual survivor from sibling group signals while cleaning an independent group", async (kind) => {
+		const root = createRunRoot();
+		mkdirSync(join(root, "node_modules"));
+		const namespace = join(root, "sumocode-harness-v2-run-manual-sibling");
+		mkdirSync(namespace);
+		writeFileSync(join(namespace, "owner.json"), JSON.stringify(owner));
+		writeFileSync(join(namespace, "children.jsonl"), `${JSON.stringify(spawn)}\n${kind === "unknown" ? "null\n" : ""}`);
+		const command = `${HARNESS_SIGNATURE_ENV_KEY}=${HARNESS_SIGNATURE} node orphan`;
+		const manual = { pid: 60_001, ppid: 1, pgid: 60_001, start: "leader-start", command };
+		const sibling = { pid: 60_002, ppid: manual.pid, pgid: manual.pgid, start: "sibling-start", command };
+		const independent = { pid: 62_001, ppid: 1, pgid: 62_001, start: "independent-start", command };
+		const rows = [manual, sibling, independent];
+		const report = await inspectIntegrationPreflight({ root, tempRoot: root, rows, env: {} });
+		const signals: Array<[number, string]> = [];
+		let scans = 0;
+		const result = await fixIntegrationPreflight(report, { table: { rows }, rows, readRows: () => ++scans === 1 ? rows : [manual],
+			currentPgid: 99_999, kill: (pid, signal) => { signals.push([pid, String(signal)]); return true; }, wait: async () => {},
+		});
+		expect(signals.filter(([pid]) => pid === manual.pid || pid === -manual.pgid)).toEqual([]);
+		expect(signals).toContainEqual([-independent.pgid, "SIGTERM"]);
+		expect(signals).toContainEqual([-independent.pgid, "SIGKILL"]);
+		if (kind === "unknown") {
+			expect(result).toMatchObject({ refused: true, issues: [expect.objectContaining({ code: "harness-census-unverified" })] });
+			expect(existsSync(namespace)).toBe(true);
+		}
+	});
+
+	it.each(["file", "missing"])("names %s required root read loss", async (kind) => {
+		const root = createRunRoot();
+		const tempRoot = join(root, "unreadable-root");
+		if (kind === "file") writeFileSync(tempRoot, "not a directory");
+		const report = await inspectIntegrationPreflight({ root, tempRoot, rows: [], env: {} });
+		expect(report.issues).toContainEqual(expect.objectContaining({ code: "harness-root-unavailable" }));
+	});
+
+	it.each([
+		null, [], 42, {}, { pid: 1 }, { ...owner, mode: "bogus" }, { ...owner, runId: "" },
+		{ ...owner, ownerToken: "" }, { ...owner, ownerProcessStart: "" }, { ...owner, runId: 42 },
+		{ pid: deadPid }, { pid: deadPid, ownerToken: "legacy-token" },
+	])("preserves unknown current shared owners ahead of retention %j", async (record) => {
+		const root = createRunRoot();
+		mkdirSync(join(root, "node_modules"));
+		const namespace = join(root, "sumocode-harness-v2-run-invalid-owner");
+		mkdirSync(namespace);
+		writeFileSync(join(namespace, "owner.json"), JSON.stringify(record));
+		writeFileSync(join(namespace, "evidence-retained.json"), "{}\n");
+		const report = await inspectIntegrationPreflight({ root, tempRoot: root, rows: [], env: {} });
+		expect(report.issues).toContainEqual(expect.objectContaining({ code: "harness-owner-unverified" }));
+		expect(report.retainedEvidence).toEqual([]);
+		expect(report.issues.find((issue) => issue.code === "stale-harness-state")).toBeUndefined();
+	});
+
+	it.each(["absent", "directory", "symlink", "malformed"])("preserves %s v2 owner read loss", async (kind) => {
+		const root = createRunRoot();
+		const namespace = join(root, "sumocode-harness-v2-focused-owner-loss");
+		mkdirSync(namespace);
+		const path = join(namespace, "owner.json");
+		if (kind === "directory") mkdirSync(path);
+		if (kind === "malformed") writeFileSync(path, "private-owner-parse-secret");
+		if (kind === "symlink") { writeFileSync(join(root, "owner"), JSON.stringify(owner)); symlinkSync(join(root, "owner"), path); }
+		const report = await inspectIntegrationPreflight({ root, tempRoot: root, rows: [], env: {} });
+		expect(report.issues).toContainEqual(expect.objectContaining({ code: "harness-owner-unverified" }));
+		expect(JSON.stringify(report)).not.toContain("private-owner-parse-secret");
+		expect(report.retainedEvidence).toEqual([]);
+	});
+
+	it.each([
+		["sumocode-fake-pi-legacy", undefined, "stale"],
+		["sumocode-harness-v2-legacy-pid", { pid: deadPid }, "stale"],
+		["sumocode-harness-v2-legacy-token", { pid: deadPid, ownerToken: "legacy-token" }, "stale"],
+		["sumocode-harness-v2-legacy-birth", { pid: deadPid, ownerProcessStart: "legacy-birth" }, "stale"],
+		["sumocode-harness-v2-focused-lazy", { pid: deadPid, mode: "focused", runId: "focused-run", ownerProcessStart: "worker-start" }, "stale"],
+		["sumocode-harness-v2-focused-no-run", { pid: deadPid, mode: "focused", ownerProcessStart: "worker-start" }, "unknown"],
+		["sumocode-harness-v2-focused-no-birth", { pid: deadPid, mode: "focused", runId: "focused-run" }, "unknown"],
+		["sumocode-harness-v2-focused-bad-token", { pid: deadPid, mode: "focused", runId: "focused-run", ownerProcessStart: "worker-start", ownerToken: null }, "unknown"],
+		["sumocode-harness-v2-legacy-bad-mode", { pid: deadPid, mode: "invalid" }, "unknown"],
+		["sumocode-harness-v2-run-legacy-claim", { pid: deadPid }, "unknown"],
+		["sumocode-harness-v2-missing-owner", undefined, "unknown"],
+	] as const)("allows absent census only in concrete supported context %s", async (name, record, expected) => {
+		const root = createRunRoot();
+		const namespace = join(root, name);
+		mkdirSync(namespace);
+		if (record !== undefined) writeFileSync(join(namespace, "owner.json"), JSON.stringify(record));
+		const report = await inspectIntegrationPreflight({ root, tempRoot: root, rows: [], env: {} });
+		expect(report.issues.find((issue) => issue.code === "stale-harness-state")?.paths ?? []).toEqual(expected === "stale" ? [namespace] : []);
+		expect(report.issues.some((issue) => issue.code === "harness-owner-unverified")).toBe(expected === "unknown");
+	});
+
+	it.each(["missing", "directory", "symlink", "torn", "malformed", "foreign", "foreign exit", "nonobject", "unknown event", "bad birth", "bad HMAC", "bad exit"])(
+		"preserves dead shared %s census as manual unknown even with a table issue", async (kind) => {
+			const root = createRunRoot();
+			const namespace = join(root, "sumocode-harness-v2-run-census-loss");
+			mkdirSync(namespace);
+			writeFileSync(join(namespace, "owner.json"), JSON.stringify(owner));
+			writeFileSync(join(namespace, "evidence-retained.json"), "{}\n");
+			const path = join(namespace, "children.jsonl");
+			if (kind === "directory") mkdirSync(path);
+			else if (kind === "symlink") { writeFileSync(join(root, "census"), ""); symlinkSync(join(root, "census"), path); }
+			else if (kind !== "missing") writeFileSync(path, kind === "torn" ? "{\"event\":" : kind === "malformed" ? "private-census-parse-secret\n"
+				: `${JSON.stringify(kind === "foreign" ? { ...spawn, runId: "foreign-run" } : kind === "foreign exit" ? { event: "exit", pid: 60_001, pgid: 60_001, runId: "foreign-run" } : kind === "nonobject" ? null
+					: kind === "unknown event" ? { ...spawn, event: "alien" } : kind === "bad birth" ? { ...spawn, processStart: "" }
+						: kind === "bad HMAC" ? { ...spawn, registrationHmac: "not-hex64" } : { event: "exit", pid: 1, pgid: 60_001 })}\n`);
+			const report = await inspectIntegrationPreflight({ root, tempRoot: root,
+				rows: { rows: [], issue: { code: "process-table-unavailable", message: "synthetic", remediation: "manual" } }, env: {} });
+			expect(report.issues).toContainEqual(expect.objectContaining({ code: "harness-census-unverified" }));
+			expect(report.retainedEvidence).toEqual([]);
+			expect(report.issues.find((issue) => issue.code === "stale-harness-state")).toBeUndefined();
+			expect(JSON.stringify(report)).not.toContain("private-census-parse-secret");
+		});
+
+	it.each(["present", "directory"])("refuses legacy census without run authority when %s", async (kind) => {
+		const root = createRunRoot();
+		const namespace = join(root, "sumocode-harness-v2-legacy-census");
+		mkdirSync(namespace);
+		writeFileSync(join(namespace, "owner.json"), JSON.stringify({ pid: deadPid }));
+		if (kind === "directory") mkdirSync(join(namespace, "children.jsonl"));
+		else writeFileSync(join(namespace, "children.jsonl"), "");
+		const report = await inspectIntegrationPreflight({ root, tempRoot: root, rows: [], env: {} });
+		expect(report.issues).toContainEqual(expect.objectContaining({ code: "harness-census-unverified" }));
+	});
+
+	it("reports valid postmortem registrations for humans without authenticating or signaling them", async () => {
+		const root = createRunRoot();
+		mkdirSync(join(root, "node_modules"));
+		const namespace = join(root, "sumocode-harness-v2-run-human-only");
+		mkdirSync(namespace);
+		writeFileSync(join(namespace, "owner.json"), JSON.stringify(owner));
+		writeFileSync(join(namespace, "children.jsonl"), [spawn, { event: "exit", pid: 60_001, pgid: 60_001, code: 0, signal: null },
+			{ event: "reaped", pid: 60_001, pgid: 60_001 }].map((event) => JSON.stringify(event)).join("\n") + "\n");
+		const rows = [{ pid: 60_001, ppid: 1, pgid: 60_001, start: "leader-start", command: `${HARNESS_SIGNATURE_ENV_KEY}=${HARNESS_SIGNATURE} node survivor` }];
+		const signals: Array<[number, string]> = [];
+		const report = await inspectIntegrationPreflight({ root, tempRoot: root, rows, env: {} });
+		expect(report.issues.find((issue) => issue.code === "orphan-harness-children")?.registeredSurvivors).toEqual([
+			expect.objectContaining({ pid: 60_001, pgid: 60_001 }),
+		]);
+		await fixIntegrationPreflight(report, { table: { rows }, rows, readRows: () => rows, currentPgid: 99_999,
+			kill: (pid, signal) => { signals.push([pid, String(signal)]); return true; }, wait: async () => {},
+		});
+		expect(signals).toEqual([]);
+	});
+
+	for (const purgeEvidence of [false, true]) {
+		it.each(["owner removed", "owner corrupted", "owner replaced", "census removed", "census corrupted", "census replaced", "census directory"])(
+			`preserves newly unknown evidence at ${purgeEvidence ? "purge" : "fix"} boundary: %s`, async (mutation) => {
+				const root = createRunRoot();
+				mkdirSync(join(root, "node_modules"));
+				const namespace = join(root, "sumocode-harness-v2-run-fresh-boundary");
+				mkdirSync(namespace);
+				const ownerPath = join(namespace, "owner.json");
+				const censusPath = join(namespace, "children.jsonl");
+				writeFileSync(ownerPath, JSON.stringify(owner));
+				writeFileSync(censusPath, "");
+				if (purgeEvidence) writeFileSync(join(namespace, "evidence-retained.json"), "{}\n");
+				const report = await inspectIntegrationPreflight({ root, tempRoot: root, rows: [], env: {} });
+				expect(purgeEvidence ? report.retainedEvidence : report.issues.find((issue) => issue.code === "stale-harness-state")?.paths).toEqual([namespace]);
+				if (mutation === "owner removed") rmSync(ownerPath);
+				else if (mutation === "owner corrupted") writeFileSync(ownerPath, "{\"pid\":");
+				else if (mutation === "owner replaced") writeFileSync(ownerPath, JSON.stringify({ pid: deadPid }));
+				else if (mutation === "census removed") rmSync(censusPath);
+				else if (mutation === "census corrupted") writeFileSync(censusPath, "{\"event\":");
+				else if (mutation === "census replaced") writeFileSync(censusPath, `${JSON.stringify({ ...spawn, runId: "foreign" })}\n`);
+				else { rmSync(censusPath); mkdirSync(censusPath); }
+				const result = await fixIntegrationPreflight(report, { purgeEvidence,
+					table: { rows: [] }, rows: [], readRows: () => [], currentPgid: 99_999,
+					kill: () => { throw new Error("unknown namespaces never signal"); }, wait: async () => {},
+				});
+				expect(result).toMatchObject({ refused: true, issues: [expect.objectContaining({ code: expect.stringMatching(/^harness-(owner|census)-unverified$/) })] });
+				expect(existsSync(namespace)).toBe(true);
+				const fresh = await inspectIntegrationPreflight({ root, tempRoot: root, rows: [], env: {} });
+				expect(fresh.retainedEvidence).toEqual([]);
+				expect(fresh.issues.find((issue) => issue.code === "stale-harness-state")).toBeUndefined();
+			});
+	}
+
+	it("names a missing required root and refuses fix without any process I/O", async () => {
+		const root = createRunRoot();
+		const report = await inspectIntegrationPreflight({ root, tempRoot: join(root, "missing"), rows: [], env: {} });
+		expect(report.issues).toContainEqual(expect.objectContaining({ code: "harness-root-unavailable" }));
+		await expect(fixIntegrationPreflight(report, {
+			table: { rows: [] }, rows: [], readRows: () => { throw new Error("root loss refuses before reads"); },
+			currentPgid: 99_999, kill: () => { throw new Error("root loss refuses before signals"); }, wait: async () => {},
+		})).resolves.toMatchObject({ refused: true });
+	});
+});
+
 describe("harness manifest audit contract", () => {
 	it("treats a manifest's forged focused mode as shared", async () => {
 		const root = createRunRoot();
@@ -1166,9 +1587,9 @@ describe("harness manifest audit contract", () => {
 		event.registrationHmac = signSpawnRegistration(event, runId, signingKey);
 		writeFileSync(manifest, `${JSON.stringify(event)}\n`);
 
-		await expect(manifestProcessGroups(manifest, "run-owner", { runId, signingKey })).resolves.toEqual([
-			expect.objectContaining({ ownershipMode: "shared" }),
-		]);
+		await expect(manifestProcessGroups(manifest, "run-owner", { runId, signingKey })).resolves.toEqual({
+			groups: [expect.objectContaining({ ownershipMode: "shared" })], failures: [],
+		});
 	});
 });
 

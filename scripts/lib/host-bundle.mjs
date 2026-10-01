@@ -40,6 +40,7 @@ export async function hostOutputsHash(root) {
 export const HOST_EXTRA_INPUTS = [
 	"scripts/build-host.mjs",
 	"scripts/lib/host-bundle.mjs",
+	"scripts/lib/production-boundaries.mjs",
 	"tsconfig.json",
 	"package.json",
 	"pnpm-lock.yaml",

@@ -18,8 +18,12 @@ export default defineConfig({
 	],
 	jsPlugins: [
 		{ name: "anti-slop", specifier: "./tools/oxlint/anti-slop/index.ts" },
+		{ name: "anti-slop-effect", specifier: "./tools/oxlint/anti-slop/effect/index.ts" },
 	],
 	rules: {
+		"anti-slop-effect/no-restricted-imports": "error",
+		// Enable no-service-constructor-imports only in reviewed Effect-adopting
+		// scopes at #590; plain TypeScript make helpers are not Effect services.
 		"anti-slop/no-chained-type-assertions": "error",
 		"anti-slop/no-conditional-empty-object-spread": "error",
 		"anti-slop/no-known-value-widening": "error",

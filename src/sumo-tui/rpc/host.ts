@@ -1563,6 +1563,8 @@ async function runRpcHostSession(options: RpcHostMainOptions, lifecycle: RpcHost
 		onReady: () => {
 			if (lifecycle.stopping) return;
 			lifecycle.markCommandReady();
+			// Auto sends busy messages to TypeSafe, so say once that a session starts in it.
+			if (stateStore.getSnapshot().promptDeliveryMode === "auto") notifications.notify("queue mode: auto · Jev decides");
 			// The RPC child polls this private gate without touching the Pi command
 			// stream; wrappers inherit the path and cannot swallow the readiness cue.
 			// The state root is not guaranteed to exist yet on source-mode runs, and

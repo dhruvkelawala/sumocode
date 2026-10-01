@@ -250,10 +250,11 @@ class DefaultRpcPromptScheduler implements RpcPromptScheduler {
 	private async dispatch(entry: DispatchedPrompt, generation: number, restoreOnFailure: boolean): Promise<boolean> {
 		if (generation !== this.generation) return false;
 		if (!this.isBusy()) {
-			// This send starts a run. The UI paints it as started now, so count it busy and make it
+			// This send may start a run. The UI paints it as started now, so count it busy and make it
 			// the task before Pi's agent_start arrives: a message typed in between is still judged.
+			// A command that starts nothing comes back `handled`, which clears the latch below.
 			this.currentTask = entry.text;
-			if (!entry.text.trimStart().startsWith("/")) this.awaitingRunStart = true;
+			this.awaitingRunStart = true;
 		}
 		this.dispatchCount += 1;
 		this.options.onDispatchStart?.(entry.text);

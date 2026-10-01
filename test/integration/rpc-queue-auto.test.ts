@@ -103,7 +103,8 @@ describe("RPC /queue auto", () => {
 		const booted = await boot("sumocode-queue-auto-", { TYPESAFE_API_KEY: "test-key", TYPESAFE_BASE_URL: baseUrl });
 		app = booted.app;
 
-		// No /queue command: auto is the starting mode when a key is set.
+		// No /queue command: auto is the starting mode when a key is set, and the session says so.
+		await waitForScreen(app, (screen) => screen.text.includes("queue mode: auto · Jev decides"), { cols: COLS, rows: ROWS, timeoutMs: 5_000 });
 		app.sendInput(`prompt A${ENTER}`);
 		await app.waitForOutput("MEDITATING", 5_000);
 		app.sendInput(`after that, open a PR${ENTER}`);

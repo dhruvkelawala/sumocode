@@ -419,6 +419,26 @@ describe("RpcPromptScheduler auto delivery", () => {
 		expect(sendPrompt.mock.calls.at(-1)).toEqual(["inspect /tmp/pi-clipboard-shot.png", { streamingBehavior: "steer" }]);
 	});
 
+	it("judges a message typed while an idle slash command is in flight, and stops once Pi says it was handled", async () => {
+		let finishCommand!: (disposition: string) => void;
+		const sendPrompt = vi.fn((message: string) => message.startsWith("/")
+			? new Promise<string>((resolve) => { finishCommand = resolve; })
+			: Promise.resolve("queued"));
+		const decideDelivery = vi.fn(async (): Promise<RpcPromptDeliveryMode> => "followUp");
+		const scheduler = createRpcPromptScheduler({ getBusy: () => false, decideDelivery, sendPrompt });
+
+		await scheduler.submit("/skill:review the parser", { delivery: "auto" });
+		await scheduler.submit("after that, open a PR", { delivery: "auto" });
+		await flush();
+		await flush();
+		expect(decideDelivery).toHaveBeenCalledWith("after that, open a PR", "/skill:review the parser");
+
+		finishCommand("handled");
+		await flush();
+		await flush();
+		expect(scheduler.getSnapshot().busy).toBe(false);
+	});
+
 	it("steers when the decider rejects", async () => {
 		const sendPrompt = vi.fn(async () => undefined);
 		const scheduler = createRpcPromptScheduler({

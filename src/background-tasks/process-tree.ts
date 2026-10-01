@@ -1,4 +1,5 @@
 import { execFile, execFileSync, type ExecFileSyncOptionsWithStringEncoding } from "node:child_process";
+import { resolvePsBinary } from "./ps-binary.js";
 
 export interface ProcessTreeIdentity {
 	readonly pid: number;
@@ -154,7 +155,7 @@ function listPosixGroupMembers(processGroupId: number): ProcessTreeMemberAnchor[
 		// Descendant anchors must survive execve during TERM handling. Keep their
 		// immutable PID + kernel creation wall time only; the separately bracketed
 		// leader fingerprint carries the random launch command token.
-		const rows = execFileSync("ps", ["-axo", "pid=,pgid=,lstart="], { encoding: "utf8" }).split("\n");
+		const rows = execFileSync(resolvePsBinary(), ["-axo", "pid=,pgid=,lstart="], { encoding: "utf8" }).split("\n");
 		const members: Array<{ pid: number; processStartTime: string }> = [];
 		for (const row of rows) {
 			const match = row.trim().match(/^(\d+)\s+(\d+)\s+(.+)$/);
@@ -198,7 +199,7 @@ export function captureProcessBirthTime(pid: number, platform: NodeJS.Platform =
 		// Writer leases must never persist argv: it can contain prompts, paths,
 		// or secrets. PID + birth timestamp is sufficient for cross-process lease
 		// death proof; terminal signalling retains the stronger command anchor.
-		return execFileSync("ps", ["-p", String(pid), "-o", "lstart="], { encoding: "utf8" }).trim() || undefined;
+		return execFileSync(resolvePsBinary(), ["-p", String(pid), "-o", "lstart="], { encoding: "utf8" }).trim() || undefined;
 	} catch {
 		return undefined;
 	}
@@ -216,7 +217,7 @@ export function captureProcessStartTime(pid: number, platform: NodeJS.Platform =
 		// `lstart` alone has one-second resolution. Include the immutable launch
 		// command, which carries a per-spawn random argument, so same-second PID
 		// reuse cannot authenticate an unrelated process as this terminal leader.
-		return execFileSync("ps", ["-p", String(pid), "-o", "lstart=", "-o", "command="], { encoding: "utf8" }).trim() || undefined;
+		return execFileSync(resolvePsBinary(), ["-p", String(pid), "-o", "lstart=", "-o", "command="], { encoding: "utf8" }).trim() || undefined;
 	} catch {
 		return undefined;
 	}
@@ -310,7 +311,7 @@ export function captureProcessCensus(
 ): readonly ProcessCensusMember[] | undefined {
 	if (platform === "win32") return undefined;
 	try {
-		const output = execute("/bin/ps", ["-axww", "-o", "pid=,pgid=,lstart=,command="], { encoding: "utf8", timeout: 5000, maxBuffer: 16 * 1024 * 1024 });
+		const output = execute(resolvePsBinary(), ["-axww", "-o", "pid=,pgid=,lstart=,command="], { encoding: "utf8", timeout: 5000, maxBuffer: 16 * 1024 * 1024 });
 		const rows: ProcessCensusMember[] = [];
 		const seen = new Set<number>();
 		for (const line of output.trim().split("\n")) {

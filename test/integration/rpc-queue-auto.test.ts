@@ -97,14 +97,13 @@ async function boot(prefix: string, env: NodeJS.ProcessEnv): Promise<{ readonly 
 }
 
 describe("RPC /queue auto", () => {
-	it("lets Jev pick each busy message's delivery, with the run's prompt as context", async () => {
+	it("defaults to auto with a key: Jev picks each busy message's delivery, with the run's prompt as context", async () => {
 		const requests: JevRequest[] = [];
 		const baseUrl = await startFakeJev(requests);
 		const booted = await boot("sumocode-queue-auto-", { TYPESAFE_API_KEY: "test-key", TYPESAFE_BASE_URL: baseUrl });
 		app = booted.app;
 
-		app.sendInput(`/queue auto${ENTER}`);
-		await waitForScreen(app, (screen) => screen.text.includes("Queue mode: auto"), { cols: COLS, rows: ROWS, timeoutMs: 5_000 });
+		// No /queue command: auto is the starting mode when a key is set.
 		app.sendInput(`prompt A${ENTER}`);
 		await app.waitForOutput("MEDITATING", 5_000);
 		app.sendInput(`after that, open a PR${ENTER}`);
@@ -123,7 +122,7 @@ describe("RPC /queue auto", () => {
 			{ message: "use a Map instead", streamingBehavior: "steer" },
 			{ message: "explode", streamingBehavior: "steer" },
 		]);
-		// The idle prompt and the /queue command never reach Jev; every busy message does, in order.
+		// The idle prompt never reaches Jev; every busy message does, in order.
 		expect(requests).toEqual([
 			{ authorization: "Bearer test-key", state: { current_task: "prompt A", message: "after that, open a PR" } },
 			{ authorization: "Bearer test-key", state: { current_task: "prompt A", message: "use a Map instead" } },

@@ -1528,6 +1528,8 @@ async function runRpcHostSession(options: RpcHostMainOptions, lifecycle: RpcHost
 	const decideDelivery = typesafeApiKey
 		? createJevDeliveryDecider(typesafeChoiceClassifier(typesafeApiKey, env.TYPESAFE_BASE_URL?.trim() || undefined))
 		: undefined;
+	// With a key, Jev picks each busy message's delivery from the start; without one auto could only steer.
+	if (decideDelivery) stateStore.setPromptDeliveryMode("auto");
 	const scheduler = createRpcPromptScheduler({
 		decideDelivery,
 		getBusy: () => {

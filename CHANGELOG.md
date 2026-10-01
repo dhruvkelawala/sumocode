@@ -11,15 +11,16 @@ landed between the original scaffold and this release.
 ## [Unreleased]
 
 ### Added
-- **`/queue auto`** — a third delivery mode in which TypeSafe's Jev
+- **`/queue auto`, the default with a TypeSafe key** — TypeSafe's Jev
   classifier picks steer or follow-up for each message sent while the agent is
-  busy. The message and the prompt that started the run go to TypeSafe; Jev
-  must be confident to choose follow-up, and anything else, including a
-  timeout or an error, steers. Without `TYPESAFE_API_KEY`, `/queue auto` keeps
-  the current mode and says so. Auto is opt-in per session, and the delivery toggle key leaves it for `steer`.
-  `TYPESAFE_BASE_URL` overrides the API root, as in TypeSafe's SDKs. The
-  classifier call lives in a reusable `judgeChoice` primitive (`src/judgment.ts`).
-  #615
+  busy. Sessions start in `auto` when `TYPESAFE_API_KEY` is set (otherwise
+  `steer`); the message and the prompt that started the run go to TypeSafe.
+  Jev must be confident to choose follow-up, and anything else, including a
+  timeout or an error, steers. `/queue steer` or `/queue follow-up` turns it off
+  for the session, and the delivery toggle key leaves it for `steer`. Without a
+  key, `/queue auto` keeps the current mode and says so. `TYPESAFE_BASE_URL`
+  overrides the API root, as in TypeSafe's SDKs. The classifier call lives in a
+  reusable `judgeChoice` primitive (`src/judgment.ts`). #615
 
 ## [0.7.6] — 2026-09-30
 

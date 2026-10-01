@@ -726,10 +726,11 @@ export class RpcHostActions {
 	}
 
 	/**
-	 * Select how a busy-turn submission is delivered: `steer` (default) injects
-	 * it into the running turn, `follow-up` queues a new turn, and `auto` (via
-	 * `/queue auto` only) lets Jev pick per message. Session-scoped: the
-	 * selection lives in chrome state only and is never persisted.
+	 * Select how a busy-turn submission is delivered: `steer` injects it into the
+	 * running turn, `follow-up` queues a new turn, and `auto` lets Jev pick per
+	 * message. A session starts in `auto` when `TYPESAFE_API_KEY` is set, else
+	 * `steer`; the toggle key flips steer/follow-up and leaves auto for steer.
+	 * Session-scoped: the selection lives in chrome state only and is never persisted.
 	 */
 	public toggleQueueDeliveryMode(): void {
 		this.setQueueDeliveryMode(toggleRpcPromptDelivery(this.currentQueueDeliveryMode()));

@@ -148,7 +148,7 @@ Active approval installation was retired by [Plan 076](plans/076-disable-approva
 | `/fast` | Toggle OpenAI/Codex priority service for this session |
 | `/queue` | Choose how a message sent while the agent works is delivered: `steer`, `follow-up`, or `auto` |
 
-`/queue auto` sends each message you type while the agent is busy, plus the prompt that started the run (up to 4,000 characters each), to TypeSafe's Jev API (`api.typesafe.ai`, or `TYPESAFE_BASE_URL`) to choose steer or follow-up. It needs `TYPESAFE_API_KEY` (without it, `/queue auto` keeps the current mode), applies to the current session only, and runs even with `--offline` once selected. When Jev is slow or unsure, messages steer.
+When `TYPESAFE_API_KEY` is set, sessions start in `auto`: each message you type while the agent is busy, plus the prompt that started the run (up to 4,000 characters each), goes to TypeSafe's Jev API (`api.typesafe.ai`, or `TYPESAFE_BASE_URL`) to choose steer or follow-up, even with `--offline`. When Jev is slow or unsure, messages steer. `/queue steer` or `/queue follow-up` turns it off for the session; unset the key to turn it off entirely. Without a key, sessions start in `steer`.
 
 ## Themes and state
 

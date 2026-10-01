@@ -1,10 +1,10 @@
-import {                                       spawn } from "node:child_process";
+import { spawn } from "node:child_process";
 import { randomBytes, randomUUID } from "node:crypto";
 import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { copyFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
-import { spawn as spawnPty,                                 } from "node-pty";
+import { spawn as spawnPty, } from "node-pty";
 import { prepareHarnessAdmission } from "./harness-admission.mjs";
 import {
 	HARNESS_OWNER_TOKEN_ENV_KEY,
@@ -35,91 +35,27 @@ const SUPERVISOR_TERM_GRACE_MS = 750;
 const STDERR_TAIL_BYTES = 64 * 1024;
 const AUDIT_FAILURES_FILE = "audit-failures.jsonl";
 
-                                                      
-
 export const READINESS_EVENT_BY_STATE = {
 	boot: "boot_screen_frame",
 	// editor_ready marks editable input; stable_chrome_ready is the owned-shell
 	// mark the removed app_ready alias used to duplicate.
 	input: "editor_ready",
 	app: "stable_chrome_ready",
-}                                                  ;
-
-                                       
-	                             
-	                                 
-	                            
-	                          
-	                        
-	                             
- 
-
-                                       
-	                             
-	                            
-	                          
-	                                 
- 
-
-                                
-	                                            
-	                     
-	                      
-	                               
-	                           
-	                                    
-	                        
-	                                   
-	                                              
-	                                  
-	                              
-	                      
-	                              
-	                                         
- 
-
-                                    
-	                       
- 
-
-                                    
-	                             
-	                     
-	                      
-	                                        
-	                           
-	                                                              
-	                                                                       
- 
+};
 
 /** OS-reported start time of this process, or undefined when ps is unavailable. */
-function ownProcessStart()                     {
+function ownProcessStart() {
 	return liveProcessStart(process.pid);
 }
 
-                                                 
-
-                                    
-	                     
-	                      
-	                               
-	                          
-	                                    
-	                             
-	                        
-	                                   
-	                             
-	                                             
- 
-
-let fallbackRoot                    ;
-let fallbackOwnerToken                    ;
-let fallbackRunId                    ;
-let fallbackSigningKey                    ;
+let fallbackRoot;
+let fallbackOwnerToken;
+let fallbackRunId;
+let fallbackSigningKey;
 let childSequence = 0;
-const focusedProcessGroups = new Map                                  ();
+const focusedProcessGroups = new Map();
 
-function harnessRoot(env                    = process.env)         {
+function harnessRoot(env = process.env) {
 	if (env.SUMOCODE_INTEGRATION_RUN_ROOT) return env.SUMOCODE_INTEGRATION_RUN_ROOT;
 	if (fallbackRoot === undefined) {
 		fallbackRoot = mkdtempSync(join(tmpdir(), "sumocode-harness-v2-focused-"));
@@ -147,13 +83,11 @@ function harnessRoot(env                    = process.env)         {
 	return fallbackRoot;
 }
 
-function manifestPath(env                    = process.env)         {
+function manifestPath(env = process.env) {
 	return env.SUMOCODE_INTEGRATION_MANIFEST ?? join(harnessRoot(env), "children.jsonl");
 }
 
-                                                                                    
-
-function harnessAuth(env                   )                          {
+function harnessAuth(env) {
 	// A focused namespace mints its identity on first use; make sure it exists
 	// before reading it, so this does not depend on evidence-dir call order.
 	if (env.SUMOCODE_INTEGRATION_RUN_ROOT === undefined) harnessRoot(env);
@@ -166,13 +100,13 @@ function harnessAuth(env                   )                          {
  * Resolve the signing identity before a child exists. Failing after spawn
  * would leave a detached process with no handle to reap it.
  */
-export function requireHarnessAuth(env                   )              {
+export function requireHarnessAuth(env) {
 	const auth = harnessAuth(env);
 	if (auth === undefined) throw new Error("harness spawn signing identity is unavailable");
 	return auth;
 }
 
-function appendManifest(event                      , env                   , auth                         )       {
+function appendManifest(event, env, auth) {
 	const path = manifestPath(env);
 	mkdirSync(dirname(path), { recursive: true });
 	let writtenEvent = event;
@@ -203,30 +137,24 @@ function appendManifest(event                      , env                   , aut
 	}
 }
 
-                               
-	                       
-	                     
-	                      
-	                               
-	                        
- 
-
-function malformedAuditFailure(reason = "malformed audit failure record")                      {
+function malformedAuditFailure(reason = "malformed audit failure record") {
 	return { phase: "audit record", pid: 0, pgid: 0, reason };
 }
 
+/* oxlint-disable anti-slop/no-runtime-typeof -- JSONL audit records are untrusted input; this guard checks the record contract field by field. */
 // oxlint-disable-next-line anti-slop/no-unknown-parameters -- JSONL is untrusted input; this predicate checks its audit-record contract.
-function isHarnessAuditFailure(value         )                               {
+function isHarnessAuditFailure(value) {
 	if (value === null || typeof value !== "object") return false;
 	// SAFETY: the object guard permits field inspection; every required field is checked below.
-	const failure = value                                ;
+	const failure = value;
 	return typeof failure.phase === "string"
 		&& typeof failure.pid === "number" && Number.isSafeInteger(failure.pid)
 		&& typeof failure.pgid === "number" && Number.isSafeInteger(failure.pgid)
 		&& typeof failure.reason === "string";
 }
+/* oxlint-enable anti-slop/no-runtime-typeof */
 
-function reportAuditFailure(env                   , failure                     )       {
+function reportAuditFailure(env, failure) {
 	try {
 		const root = harnessRoot(env);
 		appendFileSync(join(root, AUDIT_FAILURES_FILE), `${JSON.stringify({ ts: Date.now(), ...failure })}\n`, { mode: 0o600 });
@@ -243,30 +171,30 @@ function reportAuditFailure(env                   , failure                     
 }
 
 export function recordHarnessAuditFailure(
-	phase        ,
-	pid        ,
-	pgid        ,
-	env                   ,
-	reason        ,
+	phase,
+	pid,
+	pgid,
+	env,
+	reason,
 	processStart = liveProcessStart(pid),
-)       {
+) {
 	reportAuditFailure(env, { phase, pid, pgid, processStart, reason });
 }
 
-export function harnessAuditFailures(root        )                        {
+export function harnessAuditFailures(root) {
 	let contents;
 	try {
 		contents = readFileSync(join(root, AUDIT_FAILURES_FILE), "utf8");
 	} catch (error) {
 		// SAFETY: readFileSync throws an fs error; only ENOENT means no audit file.
-		if ((error                         ).code === "ENOENT") return [];
+		if ((error).code === "ENOENT") return [];
 		return [malformedAuditFailure(`could not read audit failure records: ${String(error)}`)];
 	}
-	const failures                        = [];
+	const failures = [];
 	for (const line of contents.split("\n")) {
 		if (!line.trim()) continue;
 		try {
-			const failure          = JSON.parse(line);
+			const failure = JSON.parse(line);
 			failures.push(isHarnessAuditFailure(failure) ? failure : malformedAuditFailure());
 		} catch {
 			failures.push(malformedAuditFailure());
@@ -275,7 +203,7 @@ export function harnessAuditFailures(root        )                        {
 	return failures;
 }
 
-function appendLifecycleManifest(event                      , env                   , processStart                    )       {
+function appendLifecycleManifest(event, env, processStart) {
 	try {
 		appendManifest(event, env, undefined);
 	} catch (error) {
@@ -290,10 +218,10 @@ function appendLifecycleManifest(event                      , env               
 }
 
 function failSpawnRegistration(
-	error        ,
-	env                   ,
-	registration                          ,
-)        {
+	error,
+	env,
+	registration,
+) {
 	reportAuditFailure(env, {
 		phase: "spawn registration",
 		pid: registration.pid,
@@ -312,21 +240,21 @@ function failSpawnRegistration(
 	throw new Error(`spawn registration failed for pid ${registration.pid}: ${cleanup}; registration error: ${String(error)}`);
 }
 
-function shellArg(value        )         {
+function shellArg(value) {
 	if (/^[A-Za-z0-9_./:=+-]+$/.test(value)) return value;
 	return `'${value.replaceAll("'", `'\\''`)}'`;
 }
 
-function childLabel(argv                   )         {
+function childLabel(argv) {
 	const command = basename(argv[0] ?? "child").replaceAll(/[^A-Za-z0-9_.-]/g, "-");
 	return `${String(++childSequence).padStart(3, "0")}-${command}`;
 }
 
 export function createChildEvidenceContext(
-	argv                   ,
-	env                    = process.env,
-	diagPath         ,
-)                       {
+	argv,
+	env = process.env,
+	diagPath,
+) {
 	const root = harnessRoot(env);
 	if (env.SUMOCODE_INTEGRATION_RUN_ROOT === undefined) {
 		env[HARNESS_OWNER_TOKEN_ENV_KEY] = fallbackOwnerToken;
@@ -346,25 +274,25 @@ export function createChildEvidenceContext(
 	};
 }
 
-function groupMayExist(pgid        )          {
+function groupMayExist(pgid) {
 	try {
 		process.kill(-pgid, 0);
 		return true;
 	} catch (error) {
 		// SAFETY: kill(0) throws an OS error; only ESRCH proves absence, not EPERM.
-		return (error                         ).code !== "ESRCH";
+		return (error).code !== "ESRCH";
 	}
 }
 
-async function waitForGroupExit(pgid        , timeoutMs        )                   {
+async function waitForGroupExit(pgid, timeoutMs) {
 	const deadline = Date.now() + timeoutMs;
 	while (groupMayExist(pgid) && Date.now() < deadline) {
-		await new Promise      ((resolve) => setTimeout(resolve, 10));
+		await new Promise((resolve) => setTimeout(resolve, 10));
 	}
 	return !groupMayExist(pgid);
 }
 
-async function terminateGroup(registration                          )                {
+async function terminateGroup(registration) {
 	const result = await reapHarnessProcessGroup(registration, {
 		wait: () => waitForGroupExit(registration.pgid, SUPERVISOR_TERM_GRACE_MS),
 	});
@@ -373,13 +301,13 @@ async function terminateGroup(registration                          )           
 	}
 }
 
-function readTail(path        )         {
+function readTail(path) {
 	if (!existsSync(path)) return "<no stderr captured>\n";
 	const bytes = readFileSync(path);
 	return bytes.subarray(Math.max(0, bytes.length - STDERR_TAIL_BYTES)).toString("utf8");
 }
 
-function runRootForEvidence(evidenceDir        )                     {
+function runRootForEvidence(evidenceDir) {
 	let path = evidenceDir;
 	for (;;) {
 		if (basename(path) === "evidence") return dirname(path);
@@ -389,7 +317,7 @@ function runRootForEvidence(evidenceDir        )                     {
 	}
 }
 
-function markRunEvidenceRetained(root        )       {
+function markRunEvidenceRetained(root) {
 	writeFileSync(
 		join(root, "evidence-retained.json"),
 		`${JSON.stringify({ ownerPid: process.pid, retainedAt: new Date().toISOString() }, null, 2)}\n`,
@@ -397,12 +325,12 @@ function markRunEvidenceRetained(root        )       {
 	);
 }
 
-function markEvidenceRetained(evidenceDir        )       {
+function markEvidenceRetained(evidenceDir) {
 	const root = runRootForEvidence(evidenceDir);
 	if (root !== undefined) markRunEvidenceRetained(root);
 }
 
-export async function captureTimeoutEvidence(input                      )                  {
+export async function captureTimeoutEvidence(input) {
 	await mkdir(input.evidenceDir, { recursive: true, mode: 0o700 });
 	await Promise.all([
 		writeFile(join(input.evidenceDir, "argv.txt"), `${input.argv.map(shellArg).join(" ")}\n`, { mode: 0o600 }),
@@ -417,7 +345,7 @@ export async function captureTimeoutEvidence(input                      )       
 	return input.evidenceDir;
 }
 
-export async function waitForDiagnosticReadiness(diagPath        , state                , timeoutMs        )                                    {
+export async function waitForDiagnosticReadiness(diagPath, state, timeoutMs) {
 	const expected = READINESS_EVENT_BY_STATE[state];
 	const deadline = Date.now() + timeoutMs;
 	for (;;) {
@@ -427,7 +355,7 @@ export async function waitForDiagnosticReadiness(diagPath        , state        
 				if (!line.trim()) continue;
 				try {
 					// SAFETY: readiness consumes only the string `event` discriminator; all other diagnostic fields are ignored.
-					const event = JSON.parse(line)                            ;
+					const event = JSON.parse(line);
 					if (event.event === expected) return event;
 				} catch {
 					// The final JSONL write may be in flight; retry the state predicate.
@@ -435,11 +363,11 @@ export async function waitForDiagnosticReadiness(diagPath        , state        
 			}
 		}
 		if (Date.now() >= deadline) throw new Error(`Timed out waiting for diagnostic readiness ${state} (${expected})`);
-		await new Promise      ((resolve) => setTimeout(resolve, 10));
+		await new Promise((resolve) => setTimeout(resolve, 10));
 	}
 }
 
-function harnessGroupRegistration(pid        , pgid        , env                   , auth             )                           {
+function harnessGroupRegistration(pid, pgid, env, auth) {
 	const registration = {
 		pid,
 		pgid,
@@ -447,7 +375,7 @@ function harnessGroupRegistration(pid        , pgid        , env                
 		ownerPid: process.pid,
 		ownerProcessStart: ownProcessStart(),
 		ownerToken: env[HARNESS_OWNER_TOKEN_ENV_KEY],
-		ownershipMode: env.SUMOCODE_INTEGRATION_RUN_ROOT === undefined ? "focused"          : "shared"         ,
+		ownershipMode: env.SUMOCODE_INTEGRATION_RUN_ROOT === undefined ? "focused" : "shared",
 	};
 	return {
 		...registration,
@@ -457,14 +385,14 @@ function harnessGroupRegistration(pid        , pgid        , env                
 	};
 }
 
-export function spawnSupervisedProcess(command        , args                   , options               = {})                    {
+export function spawnSupervisedProcess(command, args, options = {}) {
 	const env = { ...options.env, [HARNESS_SIGNATURE_ENV_KEY]: HARNESS_SIGNATURE };
 	delete env[HARNESS_SIGNING_KEY_ENV_KEY];
 	delete env[HARNESS_RUN_ID_ENV_KEY];
 	const auth = requireHarnessAuth(env);
 	const evidence = createChildEvidenceContext([command, ...args], env);
 	const admission = prepareHarnessAdmission(command, args, evidence.evidenceDir);
-	let child              ;
+	let child;
 	try {
 		child = spawn(admission.command, admission.args, { ...options, detached: true, env });
 	} catch (error) {
@@ -497,29 +425,29 @@ export function spawnSupervisedProcess(command        , args                   ,
 		admission.cancel();
 		failSpawnRegistration(String(error), env, registration);
 	}
-	child.stderr?.on("data", (chunk                 ) => {
+	child.stderr?.on("data", (chunk) => {
 		try {
 			appendFileSync(evidence.stderrPath, chunk);
 		} catch (error) {
 			reportAuditFailure(env, { phase: "stderr capture", pid, pgid, processStart: registration.processStart, reason: String(error) });
 		}
 	});
-	const exited = new Promise      ((resolveExit) => child.once("exit", (code, signal) => {
+	const exited = new Promise((resolveExit) => child.once("exit", (code, signal) => {
 		appendLifecycleManifest({ event: "exit", pid, pgid, code, signal }, env, registration.processStart);
 		resolveExit();
 	}));
-	let reaping                           ;
+	let reaping;
 	let terminationExpected = false;
 	return {
 		child,
 		pid,
 		pgid,
 		evidence,
-		terminate()                {
+		terminate() {
 			terminationExpected = true;
 			reaping ??= (async () => {
 				// Let spawn complete its setsid before addressing the new group.
-				await new Promise      ((resolveTurn) => setImmediate(resolveTurn));
+				await new Promise((resolveTurn) => setImmediate(resolveTurn));
 				try {
 					await terminateGroup(registration);
 				} catch (error) {
@@ -532,26 +460,26 @@ export function spawnSupervisedProcess(command        , args                   ,
 					});
 					throw error;
 				}
-				await Promise.race([exited, new Promise      ((resolveDelay) => setTimeout(resolveDelay, SUPERVISOR_TERM_GRACE_MS))]);
+				await Promise.race([exited, new Promise((resolveDelay) => setTimeout(resolveDelay, SUPERVISOR_TERM_GRACE_MS))]);
 				appendLifecycleManifest({ event: "reaped", pid, pgid }, env, registration.processStart);
 			})();
 			return reaping;
 		},
-		shouldCaptureExitFailure(hasPendingWaiters         )          {
+		shouldCaptureExitFailure(hasPendingWaiters) {
 			return !terminationExpected || hasPendingWaiters;
 		},
-		captureFailure(output = "", finalScreen = "")                  {
+		captureFailure(output = "", finalScreen = "") {
 			return captureTimeoutEvidence({ ...evidence, output, finalScreen });
 		},
 	};
 }
 
-export function spawnSupervisedPty(command        , args                   , options                 , evidence                      , auth             ) {
+export function spawnSupervisedPty(command, args, options, evidence, auth) {
 	const env = { ...options.env, [HARNESS_SIGNATURE_ENV_KEY]: HARNESS_SIGNATURE };
 	delete env[HARNESS_SIGNING_KEY_ENV_KEY];
 	delete env[HARNESS_RUN_ID_ENV_KEY];
 	const admission = prepareHarnessAdmission(command, args, evidence.evidenceDir);
-	let child      ;
+	let child;
 	try {
 		child = spawnPty(admission.command, admission.args, { ...options, env });
 	} catch (error) {
@@ -573,9 +501,9 @@ export function spawnSupervisedPty(command        , args                   , opt
  * The PTY child already exists when this runs, so it takes the auth the
  * caller resolved with requireHarnessAuth BEFORE spawning.
  */
-export function supervisePtyProcess(pid        , evidence                      , env                   , auth             )                                                                                        {
+export function supervisePtyProcess(pid, evidence, env, auth) {
 	const pgid = pid;
-	let reaping                           ;
+	let reaping;
 	env[HARNESS_SIGNATURE_ENV_KEY] = HARNESS_SIGNATURE;
 	const registration = harnessGroupRegistration(pid, pgid, env, auth);
 	try {
@@ -598,17 +526,17 @@ export function supervisePtyProcess(pid        , evidence                      ,
 		pid,
 		pgid,
 		evidence,
-		terminate()                {
+		terminate() {
 			reaping ??= terminateGroup(registration).then(() => appendLifecycleManifest({ event: "reaped", pid, pgid }, env, registration.processStart));
 			return reaping;
 		},
-		captureFailure(output = "", finalScreen = "")                  {
+		captureFailure(output = "", finalScreen = "") {
 			return captureTimeoutEvidence({ ...evidence, output, finalScreen });
 		},
 	};
 }
 
-export function recordPtyExit(pid        , pgid        , exitCode        , signal                    , env                   )       {
+export function recordPtyExit(pid, pgid, exitCode, signal, env) {
 	appendLifecycleManifest({ event: "exit", pid, pgid, code: exitCode, signal, kind: "pty" }, env, liveProcessStart(pid));
 }
 

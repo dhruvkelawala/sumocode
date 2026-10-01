@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 /** Hold a trusted bootstrap until the parent has registered its birth. */
-export function prepareHarnessAdmission(command        , args                   , evidenceDir        ) {
+export function prepareHarnessAdmission(command, args, evidenceDir) {
 	// Darwin limits Unix socket addresses to 104 bytes; private test TMPDIRs exceed that.
 	const directory = mkdtempSync(join(process.platform === "darwin" ? "/private/tmp" : "/tmp", "sumo-admit-"));
 	const address = join(directory, "socket");
@@ -28,7 +28,7 @@ export function prepareHarnessAdmission(command        , args                   
 		args: [fileURLToPath(new URL("./fixtures/harness-admission.cjs", import.meta.url)), address,
 			publicKey.export({ type: "spki", format: "der" }).toString("base64"), command, ...args],
 		// A same-user child can replace the socket path, but cannot forge this grant.
-		release(pid        )       { grant = sign(null, Buffer.from(String(pid)), privateKey).toString("base64"); },
-		cancel()       { server.close(); },
+		release(pid) { grant = sign(null, Buffer.from(String(pid)), privateKey).toString("base64"); },
+		cancel() { server.close(); },
 	};
 }

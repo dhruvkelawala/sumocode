@@ -12,6 +12,8 @@ const COLS = 100;
 const ROWS = 30;
 let app: SpawnedPiPty | undefined;
 let jev: Server | undefined;
+/** The fake Jev holds its first answer until the test releases it, so the judging state is observable. */
+let releaseJev: () => void = () => undefined;
 
 afterEach(async () => {
 	await app?.cleanupAndWait();
@@ -60,10 +62,12 @@ async function readBody(request: IncomingMessage): Promise<string> {
 
 /** A local stand-in for TypeSafe's System One API: follow-up for "after that…", 500 for "explode", steer otherwise. */
 async function startFakeJev(requests: JevRequest[]): Promise<string> {
+	const firstAnswer = new Promise<void>((resolve) => { releaseJev = resolve; });
 	const server = createServer(async (request, response) => {
 		// SAFETY: SumoCode's TypeSafe client is the only caller and always posts JSON.
 		const body = JSON.parse(await readBody(request)) as { readonly state: JevRequest["state"] };
 		requests.push({ authorization: request.headers.authorization, state: body.state });
+		if (requests.length === 1) await firstAnswer;
 		if (body.state.message.includes("explode")) {
 			response.writeHead(500).end();
 			return;
@@ -104,6 +108,9 @@ describe("RPC /queue auto", () => {
 		app.sendInput(`prompt A${ENTER}`);
 		await app.waitForOutput("MEDITATING", 5_000);
 		app.sendInput(`after that, open a PR${ENTER}`);
+		// While Jev judges it, the message sits in the host's queue, labelled QUEUED.
+		await waitForScreen(app, (screen) => screen.text.includes("QUEUED (1)") && !screen.text.includes("COMPACTION"), { cols: COLS, rows: ROWS, timeoutMs: 5_000 });
+		releaseJev();
 		app.sendInput(`use a Map instead${ENTER}`);
 		app.sendInput(`explode${ENTER}`);
 		await waitForScreen(app, (screen) => screen.text.includes("FOLLOW-UP (1)") && screen.text.includes("STEERING (2)"), {

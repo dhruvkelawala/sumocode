@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { once } from "node:events";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -1145,6 +1145,172 @@ describe("verified harness group cleanup", () => {
 	});
 });
 
+describe("canonical census hardening", () => {
+	const auth = { runId: "canonical-run", signingKey: "canonical-key" };
+	const ownerToken = "canonical-owner";
+	const registration = {
+		pid: 60_001, pgid: 60_001, processStart: "leader-start",
+		ownerPid: 59_001, ownerProcessStart: "owner-start",
+	};
+
+	function spawnEvent(tuple = registration, runId = auth.runId) {
+		return { event: "spawn", ...tuple, runId,
+			registrationHmac: signSpawnRegistration(tuple, runId, auth.signingKey) };
+	}
+
+	it.each(["missing", "directory", "symlink"])("names %s census read loss without leaking contents", async (kind) => {
+		const root = createRunRoot();
+		const manifest = join(root, "children.jsonl");
+		if (kind === "directory") mkdirSync(manifest);
+		if (kind === "symlink") {
+			writeFileSync(join(root, "secret"), "private-census-secret");
+			symlinkSync(join(root, "secret"), manifest);
+		}
+		const census = await manifestProcessGroups(manifest, ownerToken, auth);
+		expect(census.groups).toEqual([]);
+		expect(census.failures).not.toEqual([]);
+		expect(JSON.stringify(census)).not.toContain("private-census-secret");
+		expect(Object.keys(census).sort()).toEqual(["failures", "groups"]);
+	});
+
+	it.each([
+		{ pid: 1 }, { pgid: 1 }, { ownerPid: 1 }, { ownerPid: 60_001 },
+		{ processStart: "" }, { ownerProcessStart: "" }, { ownerProcessStart: undefined },
+		{ pid: 60_001.5 }, { ownerPid: "59_001" },
+	])("rejects signed incomplete or unsafe spawn identity %j", async (invalid) => {
+		const manifest = join(createRunRoot(), "children.jsonl");
+		const tuple = { ...registration, ...invalid };
+		writeFileSync(manifest, `${JSON.stringify({ event: "spawn", ...tuple, runId: auth.runId,
+			registrationHmac: signSpawnRegistration(tuple, auth.runId, auth.signingKey) })}\n`);
+		const census = await manifestProcessGroups(manifest, ownerToken, auth);
+		expect(census.groups).toEqual([]);
+		expect(census.failures).toEqual([expect.stringContaining("spawn identity")]);
+	});
+
+	it("coalesces only exact authority tuples and keeps signed conflicts despite later records", async () => {
+		const manifest = join(createRunRoot(), "children.jsonl");
+		const valid = spawnEvent();
+		const conflict = spawnEvent({ ...registration, processStart: "other-birth" });
+		const invalid = [null, [], {}, 42, { event: "alien", pid: 60_001, pgid: 60_001 },
+			spawnEvent(registration, "foreign-run"), { ...valid, registrationHmac: "0".repeat(64) }];
+		writeFileSync(manifest, [valid, valid, ...invalid, conflict, valid].map((event) => JSON.stringify(event)).join("\n") + "\nprivate-parse-secret\n{\"event\":");
+		const census = await manifestProcessGroups(manifest, ownerToken, auth);
+		expect(census.groups.map((group) => group.processStart)).toEqual(["leader-start", "other-birth"]);
+		expect(census.failures).toContain("manifest conflicting pgid registrations");
+		expect(census.failures).toHaveLength(11);
+		expect(JSON.stringify(census.failures)).not.toContain("private-parse-secret");
+	});
+
+	it.each(["wait throw", "table throw", "reaped", "invalid record", "audit record"])("keeps later authorized cleanup non-green after %s", async (kind) => {
+		const root = createRunRoot();
+		const manifest = join(root, "children.jsonl");
+		const second = { ...registration, pid: 60_002, pgid: 60_002 };
+		writeFileSync(manifest, [spawnEvent(), spawnEvent(second)].map((event) => JSON.stringify(event)).join("\n") + "\n"
+			+ (kind === "invalid record" ? "null\n" : ""));
+		if (kind === "audit record") writeFileSync(join(root, "audit-failures.jsonl"), "null\n");
+		const signals: Array<[number, string]> = [];
+		let scans = 0;
+		let signaled = 0;
+		let waits = 0;
+		const owner = { pid: 59_001, ppid: 1, pgid: 59_001, start: "owner-start",
+			command: `${HARNESS_SIGNATURE_ENV_KEY}=${HARNESS_SIGNATURE} ${HARNESS_OWNER_TOKEN_ENV_KEY}=${ownerToken} node worker` };
+		const result = await auditAndReap(manifest, ownerToken, auth, {
+			readProcessTable: () => {
+				scans++;
+				if (kind === "table throw" && scans === 1) throw new Error("private-table-secret");
+				if (kind === "wait throw" || kind === "table throw") return signaled === -60_002 ? { rows: [] } : { rows: [owner,
+					{ pid: scans === 1 ? 60_001 : 60_002, ppid: owner.pid, pgid: scans === 1 ? 60_001 : 60_002, start: "leader-start", command: "pi" }] };
+				if (kind === "reaped") return { rows: scans % 2 === 1 ? [owner,
+					{ pid: scans === 1 ? 60_001 : 60_002, ppid: owner.pid, pgid: scans === 1 ? 60_001 : 60_002, start: "leader-start", command: "pi" }] : [] };
+				return { rows: [] };
+			}, currentPgid: 99_999, readProcessStart: () => undefined,
+			kill: (pid, signal) => { signaled = pid; signals.push([pid, String(signal)]); return true; },
+			wait: async () => { if (kind === "wait throw" && ++waits === 1) throw new Error("private-wait-secret"); },
+		});
+		expect(result).toBe(false);
+		if (kind === "wait throw" || kind === "reaped") expect(signals).toEqual([[-60_001, "SIGTERM"], [-60_002, "SIGTERM"]]);
+		else if (kind === "table throw") expect(signals).toEqual([[-60_002, "SIGTERM"]]);
+		else expect(signals).toEqual([]);
+	});
+
+	it.each(["append", "replace", "truncate", "torn completion", "identical inode replacement", "cross-snapshot conflict", "loss"])(
+		"parses all of observation B and preserves cleanup evidence after %s", async (kind) => {
+			const root = createRunRoot();
+			const manifest = join(root, "children.jsonl");
+			const first = `${JSON.stringify(spawnEvent())}\n`;
+			const second = `${JSON.stringify(spawnEvent({ ...registration, pid: 60_002, pgid: 60_002 }))}\n`;
+			writeFileSync(manifest, first + (kind === "torn completion" ? second.slice(0, 40) : ""));
+			let scans = 0;
+			let changed = false;
+			const result = await auditAndReap(manifest, ownerToken, auth, {
+				readProcessTable: () => {
+					scans++;
+					if (!changed) {
+						changed = true;
+						if (kind === "replace" || kind === "identical inode replacement") {
+							writeFileSync(join(root, "replacement"), kind === "replace" ? second : first);
+							renameSync(join(root, "replacement"), manifest);
+						} else if (kind === "loss") rmSync(manifest);
+						else if (kind === "truncate") writeFileSync(manifest, second);
+						else if (kind === "cross-snapshot conflict") writeFileSync(manifest, `${JSON.stringify(spawnEvent({ ...registration, processStart: "other-birth" }))}\n`);
+						else writeFileSync(manifest, first + second);
+					}
+					return { rows: [] };
+				}, currentPgid: 99_999, readProcessStart: () => undefined,
+				kill: () => { throw new Error("empty table must not signal"); }, wait: async () => {},
+			});
+			expect(result).toBe(false);
+			expect(scans).toBe(kind === "loss" || kind === "identical inode replacement" ? 1 : 2);
+		});
+
+	it("cleans a newly signed B group despite a torn A and keeps A results", async () => {
+		const manifest = join(createRunRoot(), "children.jsonl");
+		const first = `${JSON.stringify(spawnEvent())}\n`;
+		const second = { ...registration, pid: 60_002, pgid: 60_002 };
+		writeFileSync(manifest, first + "{\"event\":");
+		let scans = 0;
+		let reaped = false;
+		const signals: number[] = [];
+		await expect(auditAndReap(manifest, ownerToken, auth, {
+			readProcessTable: () => {
+				if (++scans === 1) { writeFileSync(manifest, `${JSON.stringify(spawnEvent(second))}\n`); return { rows: [] }; }
+				return { rows: reaped ? [] : [
+					{ pid: 59_001, ppid: 1, pgid: 59_001, start: "owner-start", command: `${HARNESS_SIGNATURE_ENV_KEY}=${HARNESS_SIGNATURE} ${HARNESS_OWNER_TOKEN_ENV_KEY}=${ownerToken}` },
+					{ pid: 60_002, ppid: 59_001, pgid: 60_002, start: "leader-start", command: "pi" },
+				] };
+			}, currentPgid: 99_999, readProcessStart: () => undefined,
+			kill: (pid) => { signals.push(pid); reaped = true; return true; }, wait: async () => {},
+		})).resolves.toBe(false);
+		expect(signals).toEqual([-60_002]);
+		expect(scans).toBe(3);
+	});
+
+	it("reports stable empty observations as registered-only, without signals", async () => {
+		const manifest = join(createRunRoot(), "children.jsonl");
+		writeFileSync(manifest, "");
+		await expect(auditAndReap(manifest, ownerToken, auth, {
+			readProcessTable: () => { throw new Error("no registered groups"); }, currentPgid: 99_999,
+			readProcessStart: () => undefined, kill: () => { throw new Error("no signals"); }, wait: async () => {},
+		})).resolves.toBe(true);
+	});
+
+	it("rejects a correctly signed missing birth before an empty table can green it", async () => {
+		const manifest = join(createRunRoot(), "children.jsonl");
+		const incomplete = { ...registration, processStart: undefined };
+		writeFileSync(manifest, `${JSON.stringify({ event: "spawn", ...incomplete, runId: auth.runId,
+			registrationHmac: signSpawnRegistration(incomplete, auth.runId, auth.signingKey) })}\n`);
+		const census = await manifestProcessGroups(manifest, ownerToken, auth);
+		expect(census).toEqual({ groups: [], failures: [expect.stringContaining("spawn identity")] });
+		const signals: string[] = [];
+		await expect(auditAndReap(manifest, ownerToken, auth, {
+			readProcessTable: () => ({ rows: [] }), currentPgid: 99_999,
+			readProcessStart: () => undefined,
+			kill: (_pid, signal) => { signals.push(String(signal)); return true; }, wait: async () => {},
+		})).resolves.toBe(false);
+		expect(signals).toEqual([]);
+	});
+});
+
 describe("harness manifest audit contract", () => {
 	it("treats a manifest's forged focused mode as shared", async () => {
 		const root = createRunRoot();
@@ -1166,9 +1332,9 @@ describe("harness manifest audit contract", () => {
 		event.registrationHmac = signSpawnRegistration(event, runId, signingKey);
 		writeFileSync(manifest, `${JSON.stringify(event)}\n`);
 
-		await expect(manifestProcessGroups(manifest, "run-owner", { runId, signingKey })).resolves.toEqual([
-			expect.objectContaining({ ownershipMode: "shared" }),
-		]);
+		await expect(manifestProcessGroups(manifest, "run-owner", { runId, signingKey })).resolves.toEqual({
+			groups: [expect.objectContaining({ ownershipMode: "shared" })], failures: [],
+		});
 	});
 });
 

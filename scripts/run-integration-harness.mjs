@@ -1,11 +1,13 @@
 #!/usr/bin/env node
 import { spawn, spawnSync } from "node:child_process";
-import { cp, mkdir, mkdtemp, readFile, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { constants } from "node:fs";
+import { cp, lstat, mkdir, mkdtemp, open, readFile, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { randomBytes, randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { reapHarnessProcessGroup, runIntegrationPreflight } from "./preflight-integration.mjs";
+import { spawnRegistrationHmacIsValid } from "./lib/integration-harness-auth.mjs";
 import {
 	HARNESS_OWNER_TOKEN_ENV_KEY,
 	HARNESS_RUN_ID_ENV_KEY,
@@ -15,7 +17,7 @@ import {
 } from "./lib/integration-harness-constants.mjs";
 
 const ROOT = resolve(fileURLToPath(new URL("..", import.meta.url)));
-const RUNNER_TERM_GRACE_MS = 1_000;
+const RUNNER_TERM_GRACE_MS = 750;
 const AUDIT_FAILURES_FILE = "audit-failures.jsonl";
 
 /** Validate before owner re-exec or preflight; unknown argv must never select the full lane. */
@@ -87,36 +89,111 @@ async function preparePackageSnapshot(runRoot, env) {
 	return packageRoot;
 }
 
-export async function manifestProcessGroups(manifest, ownerToken, { runId, signingKey }) {
-	let contents = "";
-	try { contents = await readFile(manifest, "utf8"); } catch { return []; }
-	const groups = new Map();
-	for (const line of contents.split("\n")) {
-		if (!line.trim()) continue;
-		try {
-			const event = JSON.parse(line);
-			if (event.event === "spawn" && Number.isSafeInteger(event.pid) && event.pid > 1
-				&& Number.isSafeInteger(event.pgid) && event.pgid > 1) {
-				groups.set(event.pgid, {
-					pid: event.pid,
-					pgid: event.pgid,
-					processStart: event.processStart,
-					ownerPid: event.ownerPid,
-					ownerProcessStart: event.ownerProcessStart,
-					ownerToken,
-					runId: event.runId === runId ? event.runId : undefined,
-					registrationHmac: event.registrationHmac,
-					signingKey,
-					// This audit owns a shared run. A manifest event cannot opt into
-					// focused mode's tokenless owner proof.
-					ownershipMode: "shared",
-				});
-			}
-		} catch {
-			// A worker can be interrupted mid-append; earlier complete registrations remain auditable.
+function manifestFileIdentity(info) {
+	return [info.dev, info.ino, info.mode, info.size, info.mtimeNs, info.ctimeNs].join(":");
+}
+
+function groupIdentity(group) {
+	return JSON.stringify([group.pid, group.pgid, group.processStart, group.ownerPid,
+		group.ownerProcessStart, group.ownerToken, group.runId, group.registrationHmac,
+		group.signingKey, group.ownershipMode]);
+}
+
+function addManifestGroup(groups, group, failures) {
+	if (groups.some((known) => groupIdentity(known) === groupIdentity(group))) return false;
+	if (groups.some((known) => known.pgid === group.pgid)) failures.push("manifest conflicting pgid registrations");
+	groups.push(group);
+	return true;
+}
+
+/* oxlint-disable anti-slop/no-runtime-typeof -- Validate the supervisor's untrusted JSONL event schema before consuming fields. */
+function manifestEventIsValid(event) {
+	if (event === null || typeof event !== "object" || Array.isArray(event)
+		|| !["spawn", "exit", "reaped"].includes(event.event)
+		|| !Number.isSafeInteger(event.pid) || event.pid <= 1
+		|| !Number.isSafeInteger(event.pgid) || event.pgid <= 1) return false;
+	for (const field of ["processStart", "ownerProcessStart", "runId", "registrationHmac", "evidenceDir"]) {
+		if (event[field] !== undefined && (typeof event[field] !== "string" || event[field].trim().length === 0)) return false;
+	}
+	return (event.ownerPid === undefined || (Number.isSafeInteger(event.ownerPid) && event.ownerPid > 1 && event.ownerPid !== event.pid))
+		&& (event.ownershipMode === undefined || ["shared", "focused"].includes(event.ownershipMode))
+		&& (event.argv === undefined || (Array.isArray(event.argv) && event.argv.every((arg) => typeof arg === "string")))
+		&& (event.kind === undefined || event.kind === "pty")
+		&& (event.code === undefined || event.code === null || Number.isSafeInteger(event.code))
+		&& (event.signal === undefined || event.signal === null || typeof event.signal === "string" || Number.isSafeInteger(event.signal));
+}
+
+async function manifestSnapshot(manifest, ownerToken, { runId, signingKey }) {
+	const snapshot = { groups: [], failures: [], contents: undefined, identity: undefined };
+	let file;
+	try {
+		const before = await lstat(manifest, { bigint: true });
+		if (!before.isFile()) {
+			snapshot.failures.push("manifest is not a regular file (symlinks refused)");
+			return snapshot;
+		}
+		file = await open(manifest, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+		const opened = await file.stat({ bigint: true });
+		snapshot.identity = manifestFileIdentity(opened);
+		if (!opened.isFile() || snapshot.identity !== manifestFileIdentity(before)) {
+			snapshot.failures.push("manifest file identity changed before read");
+			if (!opened.isFile()) return snapshot;
+		}
+		snapshot.contents = await file.readFile();
+		const after = await file.stat({ bigint: true });
+		const pathAfter = await lstat(manifest, { bigint: true });
+		if (snapshot.identity !== manifestFileIdentity(after) || snapshot.identity !== manifestFileIdentity(pathAfter)) {
+			snapshot.failures.push("manifest unstable during read");
+		}
+	} catch {
+		snapshot.failures.push("manifest read unavailable or lost");
+	} finally {
+		if (file) {
+			try { await file.close(); } catch { snapshot.failures.push("manifest close failed"); }
 		}
 	}
-	return [...groups.values()];
+	if (snapshot.contents === undefined) return snapshot;
+	const contents = snapshot.contents.toString("utf8");
+	const lines = contents.split("\n");
+	for (let index = 0; index < lines.length; index++) {
+		const line = lines[index];
+		if (!line.trim()) continue;
+		if (index === lines.length - 1) snapshot.failures.push(`manifest torn line ${index + 1}`);
+		let event;
+		try { event = JSON.parse(line); } catch {
+			snapshot.failures.push(`manifest malformed line ${index + 1}`);
+			continue;
+		}
+		if (!manifestEventIsValid(event)) {
+			snapshot.failures.push(`manifest invalid event or spawn identity at line ${index + 1}`);
+			continue;
+		}
+		if (event.event !== "spawn") continue;
+		if (typeof event.processStart !== "string" || event.processStart.trim().length === 0
+			|| typeof event.ownerProcessStart !== "string" || event.ownerProcessStart.trim().length === 0
+			|| !Number.isSafeInteger(event.ownerPid) || event.ownerPid <= 1 || event.ownerPid === event.pid) {
+			snapshot.failures.push(`manifest incomplete spawn identity at line ${index + 1}`);
+			continue;
+		}
+		if (event.runId !== runId || !spawnRegistrationHmacIsValid(event, runId, signingKey)) {
+			snapshot.failures.push(`manifest spawn authentication failed at line ${index + 1}`);
+			continue;
+		}
+		addManifestGroup(snapshot.groups, {
+			pid: event.pid, pgid: event.pgid, processStart: event.processStart,
+			ownerPid: event.ownerPid, ownerProcessStart: event.ownerProcessStart,
+			ownerToken, runId, registrationHmac: event.registrationHmac, signingKey,
+			// The shared audit never accepts record-selected focused owner proof.
+			ownershipMode: "shared",
+		}, snapshot.failures);
+	}
+	return snapshot;
+}
+/* oxlint-enable anti-slop/no-runtime-typeof */
+
+export async function manifestProcessGroups(manifest, ownerToken, auth) {
+	const { groups, failures } = await manifestSnapshot(manifest, ownerToken, auth);
+	return { groups, failures };
 }
 
 function malformedAuditFailure(reason = "malformed audit failure record") {
@@ -152,25 +229,46 @@ async function readAuditFailures(root) {
 	});
 }
 
-export async function auditAndReap(manifest, ownerToken, auth) {
-	const groups = await manifestProcessGroups(manifest, ownerToken, auth);
+export async function auditAndReap(manifest, ownerToken, auth, processIO = {}) {
+	const first = await manifestSnapshot(manifest, ownerToken, auth);
+	const groups = [];
+	const failures = [...first.failures];
 	const results = [];
-	for (const group of groups) {
-		results.push({ group, result: await reapHarnessProcessGroup(group, {
-			wait: () => waitForGroupExit(group.pgid, RUNNER_TERM_GRACE_MS),
-		}) });
+	// Two complete observations only. Cleanup can append lifecycle records or
+	// expose a new registration; uncertainty must not discard either snapshot.
+	for (let pass = 0; pass < 2; pass++) {
+		const snapshot = pass === 0 ? first : await manifestSnapshot(manifest, ownerToken, auth);
+		if (pass === 1) {
+			failures.push(...snapshot.failures);
+			if (first.contents === undefined || snapshot.contents === undefined
+				|| !first.contents.equals(snapshot.contents) || first.identity !== snapshot.identity) {
+				failures.push("manifest changed or lost between census observations");
+			}
+		}
+		for (const group of snapshot.groups) {
+			if (!addManifestGroup(groups, group, failures)) continue;
+			try {
+				results.push({ group, result: await reapHarnessProcessGroup(group, {
+					...processIO,
+					wait: processIO.wait ?? (() => waitForGroupExit(group.pgid, RUNNER_TERM_GRACE_MS)),
+				}) });
+			} catch {
+				results.push({ group, result: { status: "unverified", error: "registered group cleanup threw" } });
+			}
+		}
 	}
 	const nonclean = results.filter(({ result }) => result.status !== "exited");
 	const auditFailures = await readAuditFailures(resolve(manifest, ".."));
-	if (nonclean.length > 0 || auditFailures.length > 0) {
+	if (nonclean.length > 0 || auditFailures.length > 0 || failures.length > 0) {
 		const details = [
 			...nonclean.map(({ group, result }) => `pid ${group.pid} pgid ${group.pgid} born ${group.processStart ?? "unknown"}: ${result.status}${result.identityStatus ? `/${result.identityStatus}` : ""}${result.error ? ` (${result.error})` : ""}`),
 			...auditFailures.map((failure) => `pid ${failure.pid ?? "unknown"} pgid ${failure.pgid ?? "unknown"} born ${failure.processStart ?? "unknown"}: ${failure.phase ?? "audit"} (${failure.reason ?? "unknown reason"})`),
+			...failures,
 		].join(", ");
-		process.stderr.write(`[integration harness] zero-orphan audit FAILED: ${nonclean.length} nonclean registered group(s), ${auditFailures.length} audit failure record(s) (${details})\n`);
+		process.stderr.write(`[integration harness] zero-orphan audit FAILED: ${nonclean.length} nonclean registered group(s), ${auditFailures.length} audit failure record(s), ${failures.length} census failure(s) (${details}); registered-only scope, not complete process coverage\n`);
 		return false;
 	}
-	process.stdout.write(`[integration harness] zero-orphan audit: 0 survivors across ${groups.length} registered process group(s)\n`);
+	process.stdout.write(`[integration harness] zero-orphan audit: 0 survivors across ${groups.length} registered process group(s); registered-only scope, not complete process coverage or quiescence\n`);
 	return true;
 }
 
@@ -215,6 +313,7 @@ async function main(ownerToken, plan) {
 		root: ROOT,
 		startedAt: new Date().toISOString(),
 	}, null, 2)}\n`, { mode: 0o600 });
+	await writeFile(manifest, "", { mode: 0o600, flag: "wx" });
 	if (plan.selectedFile) await writeFile(join(runRoot, "selection.json"), `${JSON.stringify({
 		scope: "selected-file (partial; not full integration/native certification)",
 		selectedFile: plan.selectedFile,

@@ -134,10 +134,24 @@ describe("RpcPromptScheduler", () => {
 
 		await expect(scheduler.submit("ordinary", { delivery: "steer" })).resolves.toBe("queued");
 		await expect(scheduler.submit("/extension-command", { delivery: "followUp" })).resolves.toBe("sent");
+		await expect(scheduler.submit("/auto-command", { delivery: "auto" })).resolves.toBe("sent");
 		await flush();
 
 		expect(sendPrompt).toHaveBeenCalledWith("/extension-command", { streamingBehavior: "followUp" });
+		expect(sendPrompt).toHaveBeenCalledWith("/auto-command", { streamingBehavior: "steer" });
 		expect(scheduler.getSnapshot().queuedMessages).toEqual(["ordinary"]);
+	});
+
+	it("reports a dispatched run start as busy before Pi's agent_start", async () => {
+		const scheduler = createRpcPromptScheduler({ getBusy: () => false, sendPrompt: async () => undefined });
+
+		await scheduler.submit("start", { delivery: "steer" });
+		await flush();
+		expect(scheduler.getSnapshot().busy).toBe(true);
+
+		scheduler.handleAgentEvent({ type: "agent_start" });
+		scheduler.handleAgentEvent({ type: "agent_settled" });
+		expect(scheduler.getSnapshot().busy).toBe(false);
 	});
 
 	it("runs host commands before compaction holding", async () => {

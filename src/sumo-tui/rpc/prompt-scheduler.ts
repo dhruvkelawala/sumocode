@@ -194,7 +194,7 @@ class DefaultRpcPromptScheduler implements RpcPromptScheduler {
 
 	public getSnapshot(): RpcPromptSchedulerSnapshot {
 		return {
-			busy: this.lifecycleBusy || this.dispatchCount > 0 || this.options.getBusy?.() === true,
+			busy: this.lifecycleBusy || this.awaitingRunStart || this.dispatchCount > 0 || this.options.getBusy?.() === true,
 			dispatching: this.dispatchCount > 0,
 			queuedMessages: this.queue.map((entry) => entry.text),
 			localQueue: this.queue.map((entry) => ({ ...entry })),

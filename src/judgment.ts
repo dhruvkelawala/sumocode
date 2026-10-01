@@ -60,7 +60,12 @@ export function typesafeChoiceClassifier(apiKey: string, baseUrl = TYPESAFE_DEFA
 			body: JSON.stringify({ model: "jev-latest", state, questions: { answer: { type: "choice", ...question } } }),
 		});
 		if (!response.ok) return undefined;
-		const body: unknown = await response.json();
+		let body: unknown;
+		try {
+			body = await response.json();
+		} catch {
+			return undefined;
+		}
 		return isTypesafeChoiceBody(body) ? body.answers.answer : undefined;
 	};
 }

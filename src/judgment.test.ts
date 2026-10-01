@@ -83,6 +83,7 @@ describe("typesafeChoiceClassifier", () => {
 	it("returns undefined for an error status or a malformed body", async () => {
 		const signal = new AbortController().signal;
 		await expect(typesafeChoiceClassifier("k", undefined, fetchReturning(401, "{}"))({ message: "hi" }, question, signal)).resolves.toBeUndefined();
+		await expect(typesafeChoiceClassifier("k", undefined, fetchReturning(200, "<html>proxy error</html>"))({ message: "hi" }, question, signal)).resolves.toBeUndefined();
 		await expect(typesafeChoiceClassifier("k", undefined, fetchReturning(200, '{"answers":{"answer":{"choice":3}}}'))({ message: "hi" }, question, signal)).resolves.toBeUndefined();
 		await expect(typesafeChoiceClassifier("k", undefined, fetchReturning(200, '{"answers":{"answer":{"choice":"yes","confidence":42}}}'))({ message: "hi" }, question, signal)).resolves.toBeUndefined();
 	});

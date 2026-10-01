@@ -604,9 +604,10 @@ describe("RpcHostActions", () => {
 		expect(available.stateChanges.at(-1)?.promptDeliveryMode).toBe("steer");
 
 		const keyless = setup();
+		await keyless.actions.handleSubmittedText("/queue follow-up");
 		await keyless.actions.handleSubmittedText("/queue auto");
-		expect(keyless.stateChanges.at(-1)?.promptDeliveryMode).toBe("auto");
-		expect(keyless.notifications).toEqual([{ message: "auto needs TYPESAFE_API_KEY · steering", level: "warning" }]);
+		expect(keyless.stateChanges.at(-1)?.promptDeliveryMode).toBe("steer");
+		expect(keyless.notifications.at(-1)).toEqual({ message: "auto needs TYPESAFE_API_KEY · steering", level: "warning" });
 	});
 
 	it("routes the delivery-toggle keybinding through the same /queue path", () => {

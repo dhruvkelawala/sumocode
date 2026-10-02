@@ -41,7 +41,7 @@ export interface BuildCompletionManifestOptions {
 
 function git(cwd: string, args: readonly string[], signal?: AbortSignal): Promise<string | undefined> {
 	if (signal?.aborted) return Promise.resolve(undefined);
-	return new Promise((resolve) => {
+	return new Promise<string | undefined>((resolve) => {
 		let output: string | undefined;
 		const child = execFile("git", ["-C", cwd, ...args], {
 			encoding: "utf8",
@@ -57,7 +57,7 @@ function git(cwd: string, args: readonly string[], signal?: AbortSignal): Promis
 			signal?.removeEventListener("abort", stop);
 			resolve(signal?.aborted ? undefined : output);
 		});
-	});
+	}).catch(() => undefined);
 }
 
 function statusPaths(output: string): string[] {

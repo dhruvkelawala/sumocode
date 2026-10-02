@@ -59,13 +59,13 @@ await ${profile === "source" ? `jiti.import(${JSON.stringify(join(root, entry))}
 if (effects.length) throw new Error("eager Effect evaluation: " + effects.join(", "));
 await ${profile === "source" ? `jiti.import(${JSON.stringify(join(root, subject === "steering" ? "src/subagents/steering-ack-effect.ts" : "src/subagents/manifest-effect.ts"))})` : `import(${JSON.stringify(pathToFileURL(join(directory, subject === "steering" ? STEERING_ACK_OUTPUT : MANIFEST_OUTPUT)).href)})`};
 if (!effects.length) throw new Error("probe did not observe lazy Effect evaluation");
-console.log("cold until steering and manifest");
+console.log("cold until explicit lazy evaluation");
 `);
 		const stdout = execFileSync(process.execPath, [probe], {
 			cwd: root, encoding: "utf8",
 			env: { PATH: process.env.PATH, HOME: home, PI_CODING_AGENT_DIR: home, SUMO_TUI_DIAG_FILE: diagnostic },
 		});
-		expect(stdout).toContain("cold until steering");
+		expect(stdout).toContain("cold until explicit lazy evaluation");
 		const events = (await readFile(diagnostic, "utf8")).trim().split("\n").map((line) => JSON.parse(line).event);
 		expect(events.filter((event) => event === "visible_steering_effect_loaded")).toHaveLength(subject === "steering" ? 1 : 0);
 		expect(events.filter((event) => event === "subagent_manifest_effect_loaded")).toHaveLength(subject === "manifest" ? 1 : 0);

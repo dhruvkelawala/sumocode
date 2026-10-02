@@ -5,8 +5,8 @@ import { assertNoProductionDependencyLeakage, bundleJavaScriptText, moduleSpecif
 export const STEERING_ACK_OUTPUT = "steering-ack.effect.mjs";
 export const MANIFEST_OUTPUT = "manifest.effect.mjs";
 
-// A single reviewed local edge, not an Effect-package external allowance. Keeping
-// it out of the main bundle prevents esbuild hoisting external Effect imports.
+// Reviewed local edges, not an Effect-package external allowance. Keeping them
+// out of the main bundle prevents esbuild hoisting external Effect imports.
 export const steeringAckBoundary = {
 	name: "visible-steering-lazy-boundary",
 	setup(builder) {

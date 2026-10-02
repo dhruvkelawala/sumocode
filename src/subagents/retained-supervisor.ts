@@ -375,7 +375,7 @@ class RetainedSupervisor {
 	}
 
 	private observe(event: SubagentEvent): void {
-		if (this.terminal || this.stopped || this.manifestController.signal.aborted) return;
+		if (this.terminal || this.stopped) return;
 		try {
 			this.authority.fence();
 			this.artifacts.append(event);

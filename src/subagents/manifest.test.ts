@@ -141,8 +141,8 @@ describe("buildCompletionManifest", () => {
 		expect(manifest.changedPaths).toEqual([]);
 	});
 
-	it("degrades every git failure to a partial manifest", async () => {
-		const missingRepo = join(root, "missing");
+	it.each(["missing", "invalid\0path"])("degrades git failures in %j to a partial manifest", async (path) => {
+		const missingRepo = join(root, path);
 		await expect(buildCompletionManifest({
 			cwd: missingRepo,
 			baseRef: "deadbeef",

@@ -48,7 +48,7 @@ export async function collectManifestWithin(collection: ManifestCollection, cloc
 	const runtime = ManagedRuntime.make(clock ? Layer.succeed(Clock.Clock, clock) : Layer.empty);
 	let evidence = collection.fallback;
 	try {
-		evidence = await runtime.runPromise(manifest(collection).pipe(Effect.scoped), { signal: collection.options.signal });
+		evidence = await runtime.runPromise(manifest(collection), { signal: collection.options.signal });
 	} catch {
 		if (!collection.options.signal?.aborted) reportFailure(collection);
 	} finally {

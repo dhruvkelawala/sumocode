@@ -58,6 +58,21 @@ it.effect("the five-second deadline interrupts losing work and ignores its late 
 	f.assertDrained();
 }));
 
+it.effect("a failed late builder cannot diagnose or publish after timeout", () => Effect.gen(function* () {
+	const f = yield* fixture();
+	let reject: (error: Error) => void = () => undefined;
+	f.build.mockImplementation(() => new Promise((_resolve, fail) => { reject = fail; }));
+	const fiber = yield* f.start();
+	// WAIT-CLASS: clock-contract — end the collection before its late rejection
+	yield* TestClock.adjust(5000);
+	expect(yield* Fiber.join(fiber)).toEqual(f.collection.fallback);
+	reject(new Error("late failure"));
+	// WAIT-CLASS: negative-observation — stale failure cannot emit new diagnostics after teardown
+	yield* TestClock.adjust(0);
+	expect(f.onFailure).not.toHaveBeenCalled();
+	f.assertDrained();
+}));
+
 it.effect("successful evidence cancels the deadline and drains the runtime", () => Effect.gen(function* () {
 	const f = yield* fixture();
 	const fiber = yield* f.start();

@@ -211,8 +211,11 @@ it("self-acquires before launch, passes the retained descriptor, and keeps the h
 	await Promise.resolve();
 	expect(done).toBe(false);
 	expect(interval.mock.results[0].value.hasRef()).toBe(true);
-	emit({ kind: "run-settled", outcome: { kind: "completed", finalText: "done" } });
+	// Renew during the child lifetime, not an unbounded manifest wait: evidence
+	// now has a five-second deadline independent of the 20-second heartbeat.
 	await vi.advanceTimersByTimeAsync(20_000);
+	emit({ kind: "run-settled", outcome: { kind: "completed", finalText: "done" } });
+	await vi.advanceTimersByTimeAsync(0);
 	expect(done).toBe(false);
 	expect(f.registry.get(f.record.id)?.writerLease?.generation).toBe(2);
 	finishManifest();

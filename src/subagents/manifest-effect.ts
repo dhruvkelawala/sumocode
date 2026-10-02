@@ -46,12 +46,13 @@ const manifest = Effect.fn("collectCompletionManifest")(function* (collection: M
 export async function collectManifestWithin(collection: ManifestCollection, clock?: Clock.Clock): Promise<CompletionManifestEvidence> {
 	if (collection.options.signal?.aborted || collection.timeoutMs <= 0) return collection.fallback;
 	const runtime = ManagedRuntime.make(clock ? Layer.succeed(Clock.Clock, clock) : Layer.empty);
+	let evidence = collection.fallback;
 	try {
-		return await runtime.runPromise(manifest(collection).pipe(Effect.scoped), { signal: collection.options.signal });
+		evidence = await runtime.runPromise(manifest(collection).pipe(Effect.scoped), { signal: collection.options.signal });
 	} catch {
 		if (!collection.options.signal?.aborted) reportFailure(collection);
-		return collection.fallback;
 	} finally {
 		await runtime.dispose();
 	}
+	return collection.options.signal?.aborted ? collection.fallback : evidence;
 }

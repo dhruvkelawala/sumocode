@@ -50,11 +50,14 @@ exist (`scripts/check-tsc-budget.mjs`, `docs/perf/typecheck.json`); do not recre
 intentionally disables incremental mode for comparable counters, so a new cache is not a prerequisite.
 A draft overlay exists at `docs/research/effect-v4/agents-md-overlay.md`; reconcile it rather than invent
 another or copy old runtime/pin assumptions. Remaining foundations are overlay/import enforcement and
-build/startup guards. Native comparison exists but compares native with Node arms, not two native revisions.
+build/startup guards. The #589 v0.8 port adds exact native-vs-native comparison and source/extension
+budget collection; `docs/perf/adoption-baseline.json` remains pending quiet-machine measurements and
+explicit review. Old #597 numbers are not a v0.8 adoption budget.
 
 `native-task-params` and its worker-pool caller were retired with the old `task` tool (PR #523, issue #513). Do not
-recreate them as a Schema demonstration. Memory still exists at this baseline but is scheduled for
-removal in [#574](https://github.com/dhruvkelawala/sumocode/issues/574); exclude it from adoption.
+recreate them as a Schema demonstration. Memory existed at the research baseline and was subsequently removed by
+[#574](https://github.com/dhruvkelawala/sumocode/issues/574); exclude it from adoption and remeasure
+bundle budgets after that removal.
 Config, roles and RPC response modules are eagerly reachable today: "cold data" does not imply a cold
 import. Defer those ports unless their import graph and readiness measurements satisfy the gates.
 
@@ -263,7 +266,7 @@ Per slice, in addition to `tsc`, `build`, `lint`, `test`:
 | Startup-path assertion (0.4) | every slice | no Effect in eager launcher/pre-adoption execution; source and compiled evaluation agree with declared lazy seams |
 | Metafile assertion (0.4) | every slice | `fast-check`, `msgpackr` absent |
 | Native-vs-native perf (0.5) | every production Effect adopter | `editor_ready` ≤ baseline + 1 baseline MAD; `command_ready` ≤ baseline; `editorToCommandGapMs` ≤ baseline; 15 samples per identified native arm |
-| Source-arm perf (0.5) | every production Effect adopter | startup comparison verdict ≠ `REGRESSED`; `host-import` within the explicitly reviewed baseline budget |
+| Source-arm perf (0.5) | every production Effect adopter | startup comparison verdict ≠ `REGRESSED`; `host-import` within the explicitly reviewed baseline budget in `scripts/perf-adoption-budget.mjs` (collector reused from `perf-startup.mjs`) |
 | Integration lane + zero-survivor audit | every runtime/SumoTUI adopter, including 2.2 | green, no owned survivors; includes non-TTY `--print` exit and explicit verified-retention/hand-off cases |
 | Visual CI | any runtime/SumoTUI slice, including the first lifecycle adopters | green; no golden promotion |
 | Extension bundle bare-import guard | every slice | only allowed Pi/typebox/Node externals; necessary but insufficient because Effect may be inlined |

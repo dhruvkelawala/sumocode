@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "status": "pending",
+  "recordedAt": null,
+  "baseline": {
+    "sourceCommit": "98406d428ff562f4c57269dbc361e8f51d4a2cef",
+    "integrationBase": "97897ae98c052e5defde6f40e0da18ffe39a001f",
+    "samples": 15,
+    "machine": null,
+    "measurements": {}
+  },
+  "budgets": {},
+  "reviewRequired": "Collect on a quiet machine with Node 24 and Bun 1.4.0. Review raw samples and every ceiling before setting status to reviewed. PR #597's Node 25/pre-memory-removal numbers are not applicable."
+}

@@ -71,6 +71,8 @@
     "perf:resume:report": "node scripts/measure-resume-perf.mjs",
     "perf:startup": "node scripts/perf-startup.mjs",
     "perf:startup:compare": "node scripts/perf-startup-compare.mjs",
+    "perf:native:compare": "node scripts/perf-native-compare.mjs",
+    "perf:adoption": "node scripts/perf-adoption-budget.mjs",
     "perf:real-world": "node scripts/perf-real-world.mjs",
     "dead-code": "knip --no-exit-code",
     "dead-code:strict": "knip",

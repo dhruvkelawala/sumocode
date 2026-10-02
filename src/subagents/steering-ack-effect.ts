@@ -1,4 +1,5 @@
 import * as Clock from "effect/Clock";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as ManagedRuntime from "effect/ManagedRuntime";
@@ -67,9 +68,24 @@ const steeringAck = Effect.fn("steeringAck")(function* (options: SteeringAckWait
 	);
 });
 
+// Steering waits must not own process lifetime; leave every other runtime's clock alone.
+const nonOwningClock = Layer.effect(Clock.Clock, Effect.map(Clock.Clock, (clock): Clock.Clock => ({
+	currentTimeMillisUnsafe: () => clock.currentTimeMillisUnsafe(),
+	currentTimeMillis: clock.currentTimeMillis,
+	currentTimeNanosUnsafe: () => clock.currentTimeNanosUnsafe(),
+	currentTimeNanos: clock.currentTimeNanos,
+	monotonicTimeNanosUnsafe: () => clock.monotonicTimeNanosUnsafe(),
+	monotonicTimeNanos: clock.monotonicTimeNanos,
+	sleep: (duration) => Effect.callback<void>((resume) => {
+		const timer = setTimeout(() => resume(Effect.void), Duration.toMillis(duration));
+		timer.unref();
+		return Effect.sync(() => clearTimeout(timer));
+	}),
+})));
+
 /** A waiter owns its runtime; the public Promise never settles ahead of teardown. */
 export async function waitForSteeringAck(options: SteeringAckWait, clock?: Clock.Clock): Promise<void> {
-	const runtime = ManagedRuntime.make(clock ? Layer.succeed(Clock.Clock, clock) : Layer.empty);
+	const runtime = ManagedRuntime.make(clock ? Layer.succeed(Clock.Clock, clock) : nonOwningClock);
 	try {
 		await runtime.runPromise(steeringAck(options).pipe(Effect.scoped));
 	} finally {

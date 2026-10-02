@@ -119,6 +119,48 @@ certification. Full integration, native, visual and perf lanes are dispatched to
 GitHub Actions, not run locally. No golden promotion, PR, merge or tag is part of
 this branch's delivery.
 
+## Review repair: non-owning poll timers
+
+The default rc.112 Clock sleep uses a referenced `setTimeout`; unlike the
+replaced backend interval's `unref()`, it held an otherwise idle Node process
+open until the acknowledgement budget expired. The waiter now supplies a local
+Clock layer whose sleep unreferences its timer and clears it on interruption.
+All six time readers delegate to Effect's live clock, including its monotonic
+clock. Explicit delegation preserves the live Clock's prototype methods.
+Injected clocks still bypass this layer, so the nine TestClock cases are unchanged.
+
+Tradeoff: this is a sleep adapter for this consumer's bounded polling cadence,
+not a general-purpose clock or scheduler. No global timer patch, new public
+option, shared runtime, or durable transport change is introduced. Natural exit
+may leave the wait unresolved, just as the original unreferenced interval did;
+it is not acknowledgement, and the published control remains available.
+
+Two real Node child probes cover the initial delay and the next scheduled sleep.
+The latter holds a referenced keeper only until the first inspection. Both assert
+an unsettled wait with its terminal listener still installed at natural exit;
+neither aborts nor calls `process.exit`. Both failed against the reviewed HEAD
+with the parent's five-second timeout, then passed with the local Clock layer.
+
+Local checks used Node 24.15.0, pnpm 10.29.2 and isolated system-temp fixtures:
+**201/201** targeted waiter/backend/supervisor and bundle/build guard tests;
+**4,400 passed, 2 skipped** across 257 full unit files; typecheck, build and lint
+passed (four existing scratch warnings). The first guard run's only failure was
+system Bun 1.4.2 versus pinned 1.4.0; a temporary pinned binary passed all guards.
+The final targeted run also checks the strengthened active-listener assertion.
+Full integration/native/visual lanes were not run on the shared Mac.
+
+Review-ready gate (bundled `review-ready/contract.md`, read from the public skills
+source at `~/code/skills/skills/review-ready/`):
+- Changed seam/trace: plain wait Promise → per-wait Clock layer → unreferenced
+  cancellable sleep → existing race/drain → awaited runtime disposal.
+- **Caller-knowledge:** no new caller contract. **Deletion:** timer ownership
+  stays hidden behind the runner. **Ownership:** only the lazy waiter owns the
+  adapter. **Test-surface:** real processes and TestClock use the public runner.
+- Simplification pass: kept the existing clock injection and deep imports;
+  introduced no scheduler, service catalog, or separate test framework.
+- Verification: results above; remote workflow results are reported separately.
+  Exceptions: no design exception; heavy local lanes intentionally delegated.
+
 ## #589 remeasurement and next seams
 
 Current native extension bytes (UTF-8, not JavaScript string lengths): classic

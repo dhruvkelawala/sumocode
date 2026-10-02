@@ -1,3 +1,5 @@
+import { execFileSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import { expect, it, vi } from "@effect/vitest";
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
@@ -5,6 +7,37 @@ import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as TestClock from "effect/testing/TestClock";
 import { waitForSteeringAck, type SteeringAckWait } from "./steering-ack-effect.js";
+
+it.each(["first sleep", "scheduled poll"])("an active wait exits naturally during %s", (phase) => {
+	const modulePath = fileURLToPath(new URL("./steering-ack-effect.ts", import.meta.url));
+	const stdout = execFileSync(process.execPath, ["--input-type=module", "--eval", `
+import assert from "node:assert/strict";
+import { getEventListeners } from "node:events";
+import { createJiti } from "jiti";
+const { waitForSteeringAck } = await createJiti(import.meta.url).import(${JSON.stringify(modulePath)});
+const repeat = ${JSON.stringify(phase === "scheduled poll")};
+const keeper = repeat ? setInterval(() => {}, 1000) : undefined;
+let inspections = 0;
+let settled = false;
+const controller = new AbortController();
+void waitForSteeringAck({
+	pollMs: 250, timeoutMs: 30_000, terminalSignal: controller.signal,
+	inspect: () => { inspections++; clearInterval(keeper); return "pending"; },
+	timeout: () => new Error("acknowledgement budget expired"),
+	onFailure: () => { throw new Error("unexpected wait failure"); },
+}).then(() => { settled = true; }, () => { settled = true; });
+process.on("beforeExit", () => {
+	assert.equal(inspections, repeat ? 1 : 0);
+	assert.equal(settled, false);
+	assert.equal(getEventListeners(controller.signal, "abort").length, 1);
+	console.log("active wait exited naturally");
+});
+`], {
+		encoding: "utf8", timeout: 5000,
+		env: { PATH: process.env.PATH, TMPDIR: process.env.TMPDIR },
+	});
+	expect(stdout).toContain("active wait exited naturally");
+}, 10_000);
 
 const fixture = Effect.fn("steeringAckTest.fixture")(function* () {
 	const clock = yield* Clock.Clock;

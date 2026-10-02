@@ -23,6 +23,7 @@ const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const CANDIDATE_FILES = [
 	"src/sumo-tui/rpc/host-actions.test.ts",
 	"src/subagents/steering-ack-effect.test.ts",
+	"src/subagents/manifest-effect.test.ts",
 	"test/integration/rpc-session-switch.test.ts",
 	"test/integration/rpc-queued-message-undo.test.ts",
 	"test/integration/rpc-activity-cards.test.ts",

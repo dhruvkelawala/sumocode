@@ -7,7 +7,7 @@ import { systemProcessTree, terminateProcessTree, type ProcessTreeOperations } f
 import { spawnPaneChild, type PaneChildOptions, type VisibleLaunchEvidence, type VisibleLaunchGate } from "./backend-pane.js";
 import { retainedProcessTree, spawnPiChild, type HeadlessLaunchGate, type SpawnedChild } from "./backend-pi.js";
 import type { RunOutcome, SubagentEvent, SubagentLaunchFailure, SubagentPaneRef } from "./domain.js";
-import { buildCompletionManifest, type CompletionManifestEvidence } from "./manifest.js";
+import { buildCompletionManifest, collectCompletionManifest, type CompletionManifestEvidence } from "./manifest.js";
 import { RetainedResults } from "./retained-results.js";
 import { serveRetainedControl } from "./retained-control.js";
 import { addReportedSubagentUsage } from "./budget-policy.js";
@@ -200,6 +200,7 @@ interface RetainedHeadlessDependencies {
 	readonly operations?: ProcessTreeOperations;
 	readonly spawn?: typeof spawnPiChild;
 	readonly buildManifest?: typeof buildCompletionManifest;
+	readonly collectManifest?: typeof collectCompletionManifest;
 	/** Embedding observation seam after durable manifest write, before pointer publication. */
 	readonly onManifestWritten?: () => void;
 	/** Fixed phase only: never expose task content or caught errors. Observation cannot change settlement. */
@@ -221,6 +222,7 @@ type Settlement = "settled" | "lost" | "ambiguous";
 class RetainedSupervisor {
 	private stopControl?: () => void;
 	private readonly steeringController = new AbortController();
+	private readonly manifestController = new AbortController();
 	private readonly hasExternalController: boolean;
 	private readonly authority: ReturnType<typeof prepareLaunch>;
 	private readonly registry: SubagentRegistry;
@@ -347,6 +349,7 @@ class RetainedSupervisor {
 
 	/** Teardown-only: stop renewal timers without touching durable evidence. */
 	public dispose(): void {
+		this.manifestController.abort();
 		this.steeringController.abort();
 		clearInterval(this.heartbeat);
 		this.stopControl?.();
@@ -372,7 +375,7 @@ class RetainedSupervisor {
 	}
 
 	private observe(event: SubagentEvent): void {
-		if (this.terminal || this.stopped) return;
+		if (this.terminal || this.stopped || this.manifestController.signal.aborted) return;
 		try {
 			this.authority.fence();
 			this.artifacts.append(event);
@@ -410,23 +413,28 @@ class RetainedSupervisor {
 				await this.ready;
 				if (!this.authority.released()) throw new Error("completion before release");
 			}
-			if (this.stopped) return;
+			if (this.stopped || this.manifestController.signal.aborted) {
+				this.finish("ambiguous");
+				return;
+			}
 			const record = this.authority.record();
 			this.authority.transition((r) => ({ ...r, status: r.child ? "settling" : "ambiguous", outcome: outcome.kind }));
 			const result = this.artifacts.writeResult(outcome);
 			const fallback: CompletionManifestEvidence = { exit: outcome.kind, durationMs: Math.max(0, Date.now() - record.createdAt) };
 			let manifest = fallback;
 			if (record.child) {
-				try {
-					manifest = await (this.dependencies.buildManifest ?? buildCompletionManifest)({
-						cwd: this.cwd,
-						baseRef: record.worktree?.baseRef ?? this.baseRef,
-						worktree: record.worktree ?? undefined,
-						outcome: result.outcome, startedAt: record.createdAt,
-					});
-				} catch { /* Missing host git evidence is partial, not a different outcome. */ }
+				manifest = await (this.dependencies.collectManifest ?? collectCompletionManifest)({
+					cwd: this.cwd,
+					baseRef: record.worktree?.baseRef ?? this.baseRef,
+					worktree: record.worktree ?? undefined,
+					outcome: result.outcome, startedAt: record.createdAt,
+					signal: this.manifestController.signal,
+				}, this.dependencies.buildManifest, () => reportFailure(this.dependencies.onFailure, "settle"));
 			}
-			if (this.stopped) return;
+			if (this.stopped || this.manifestController.signal.aborted) {
+				this.finish("ambiguous");
+				return;
+			}
 			this.authority.fence();
 			const manifestPointer = this.artifacts.writeManifest({ ...manifest, exit: outcome.kind });
 			this.dependencies.onManifestWritten?.();
@@ -466,6 +474,7 @@ class RetainedSupervisor {
 		if (this.stopped) return;
 		this.stopped = true;
 		this.authority.gate.onRefused();
+		this.manifestController.abort();
 		this.steeringController.abort();
 		clearInterval(this.heartbeat);
 		this.stopControl?.();

@@ -6,7 +6,7 @@ import { pathToFileURL } from "node:url";
 import { build } from "esbuild";
 import { afterAll, expect, it } from "vitest";
 import { assertNoEffectInEagerClosure, assertNoProductionDependencyLeakage, bundleJavaScriptText, moduleSpecifiers } from "./lib/production-boundaries.mjs";
-import { buildSteeringAckBundle, STEERING_ACK_OUTPUT, steeringAckBoundary } from "./lib/steering-ack-bundle.mjs";
+import { buildManifestBundle, buildSteeringAckBundle, MANIFEST_OUTPUT, STEERING_ACK_OUTPUT, steeringAckBoundary } from "./lib/steering-ack-bundle.mjs";
 
 const root = resolve(import.meta.dirname, "..");
 const directories = [];
@@ -26,8 +26,10 @@ it.each(entries)("%s stays cold in source and bundled profiles; its lazy artifac
 	const text = bundleJavaScriptText(result.outputFiles);
 	assertNoEffectInEagerClosure(result.metafile, entry, entry);
 	assertNoProductionDependencyLeakage(result.metafile, entry, text);
-	if (entry === "src/sumo-tui/rpc/host.ts") expect(moduleSpecifiers(text)).not.toContain(`./${STEERING_ACK_OUTPUT}`);
-	else expect(moduleSpecifiers(text)).toContain(`./${STEERING_ACK_OUTPUT}`);
+	for (const artifact of [STEERING_ACK_OUTPUT, MANIFEST_OUTPUT]) {
+		if (entry === "src/sumo-tui/rpc/host.ts") expect(moduleSpecifiers(text)).not.toContain(`./${artifact}`);
+		else expect(moduleSpecifiers(text)).toContain(`./${artifact}`);
+	}
 	expect(Object.keys(result.metafile.inputs).some((path) => path.includes("/effect/"))).toBe(false);
 	await writeFile(output, text);
 	const lazy = await buildSteeringAckBundle(root, directory);
@@ -35,13 +37,18 @@ it.each(entries)("%s stays cold in source and bundled profiles; its lazy artifac
 	expect(Object.keys(lazy.metafile.inputs).some((path) => path.includes("/effect/"))).toBe(true);
 	expect(moduleSpecifiers(lazyText).every((path) => path.startsWith("node:"))).toBe(true);
 	await writeFile(join(directory, STEERING_ACK_OUTPUT), lazyText);
+	const manifest = await buildManifestBundle(root, directory);
+	const manifestText = bundleJavaScriptText(manifest.outputFiles);
+	expect(Object.keys(manifest.metafile.inputs).some((path) => path.includes("/effect/"))).toBe(true);
+	expect(moduleSpecifiers(manifestText).every((path) => path.startsWith("node:"))).toBe(true);
+	await writeFile(join(directory, MANIFEST_OUTPUT), manifestText);
 
 	// Fresh processes observe actual evaluation, not just source import spelling.
-	for (const profile of ["source", "bundle"]) {
-		const home = join(directory, profile);
+	for (const { profile, subject } of ["source", "bundle"].flatMap((profile) => ["steering", "manifest"].map((subject) => ({ profile, subject })))) {
+		const home = join(directory, `${profile}-${subject}`);
 		await mkdir(home);
 		const diagnostic = join(home, "diagnostic.jsonl");
-		const probe = join(directory, `probe-${profile}.mjs`);
+		const probe = join(directory, `probe-${profile}-${subject}.mjs`);
 		await writeFile(probe, `
 import { createJiti } from "jiti";
 const effects = [];
@@ -50,9 +57,9 @@ Symbol.for = (key) => { if (key.startsWith("effect/")) effects.push(key); return
 const jiti = createJiti(import.meta.url);
 await ${profile === "source" ? `jiti.import(${JSON.stringify(join(root, entry))})` : `import(${JSON.stringify(pathToFileURL(output).href)})`};
 if (effects.length) throw new Error("eager Effect evaluation: " + effects.join(", "));
-await ${profile === "source" ? `jiti.import(${JSON.stringify(join(root, "src/subagents/steering-ack-effect.ts"))})` : `import(${JSON.stringify(pathToFileURL(join(directory, STEERING_ACK_OUTPUT)).href)})`};
+await ${profile === "source" ? `jiti.import(${JSON.stringify(join(root, subject === "steering" ? "src/subagents/steering-ack-effect.ts" : "src/subagents/manifest-effect.ts"))})` : `import(${JSON.stringify(pathToFileURL(join(directory, subject === "steering" ? STEERING_ACK_OUTPUT : MANIFEST_OUTPUT)).href)})`};
 if (!effects.length) throw new Error("probe did not observe lazy Effect evaluation");
-console.log("cold until steering");
+console.log("cold until steering and manifest");
 `);
 		const stdout = execFileSync(process.execPath, [probe], {
 			cwd: root, encoding: "utf8",
@@ -60,7 +67,8 @@ console.log("cold until steering");
 		});
 		expect(stdout).toContain("cold until steering");
 		const events = (await readFile(diagnostic, "utf8")).trim().split("\n").map((line) => JSON.parse(line).event);
-		expect(events.filter((event) => event === "visible_steering_effect_loaded")).toHaveLength(1);
+		expect(events.filter((event) => event === "visible_steering_effect_loaded")).toHaveLength(subject === "steering" ? 1 : 0);
+		expect(events.filter((event) => event === "subagent_manifest_effect_loaded")).toHaveLength(subject === "manifest" ? 1 : 0);
 	}
 }, 30_000);
 

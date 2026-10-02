@@ -1,8 +1,6 @@
 import { execFile } from "node:child_process";
-import { promisify } from "node:util";
 import type { RunOutcome } from "./domain.js";
 
-const execFileAsync = promisify(execFile);
 const GIT_TIMEOUT_MS = 4_500;
 
 export interface CompletionManifest {
@@ -31,6 +29,9 @@ export interface CompletionManifestWorktree {
 }
 
 export interface BuildCompletionManifestOptions {
+	readonly signal?: AbortSignal;
+	/** Collector-owned close receipts; wrappers must forward these options. */
+	readonly onGitRead?: (closed: Promise<string | undefined>) => void;
 	readonly cwd: string;
 	readonly baseRef: string;
 	readonly outcome: RunOutcome;
@@ -38,19 +39,25 @@ export interface BuildCompletionManifestOptions {
 	readonly worktree?: CompletionManifestWorktree;
 }
 
-async function git(cwd: string, args: readonly string[]): Promise<string | undefined> {
-	try {
-		const { stdout } = await execFileAsync("git", ["-C", cwd, ...args], {
+function git(cwd: string, args: readonly string[], signal?: AbortSignal): Promise<string | undefined> {
+	if (signal?.aborted) return Promise.resolve(undefined);
+	return new Promise((resolve) => {
+		let output: string | undefined;
+		const child = execFile("git", ["-C", cwd, ...args], {
 			encoding: "utf8",
 			timeout: GIT_TIMEOUT_MS,
+			killSignal: "SIGKILL",
 			maxBuffer: 10 * 1024 * 1024,
+		}, (error, stdout) => { output = error ? undefined : stdout; });
+		// Node's signal option rejects at abort, before close. Own the handle so
+		// the Promise instead proves this read's process and pipes have ended.
+		const stop = (): void => { child.kill("SIGKILL"); };
+		signal?.addEventListener("abort", stop, { once: true });
+		child.once("close", () => {
+			signal?.removeEventListener("abort", stop);
+			resolve(signal?.aborted ? undefined : output);
 		});
-		return stdout;
-	} catch {
-		// Manifest collection is best-effort evidence. A missing repository,
-		// invalid ref, or timed-out git read must never break child settlement.
-		return undefined;
-	}
+	});
 }
 
 function statusPaths(output: string): string[] {
@@ -70,6 +77,24 @@ function statusPaths(output: string): string[] {
 
 const outcomeExit = (outcome: RunOutcome): CompletionManifest["exit"] => outcome.kind;
 
+/** Shared bounded settlement seam; Effect stays cold until evidence is requested. */
+export async function collectCompletionManifest(
+	options: BuildCompletionManifestOptions,
+	build: typeof buildCompletionManifest = buildCompletionManifest,
+	onFailure: () => void = () => undefined,
+): Promise<CompletionManifestEvidence> {
+	const fallback = { exit: options.outcome.kind, durationMs: Math.max(0, Date.now() - options.startedAt) };
+	if (options.signal?.aborted) return fallback;
+	const started = performance.now();
+	try {
+		const { collectManifestWithin } = await import("./manifest-effect.js");
+		return await collectManifestWithin({ options, build, fallback, onFailure, timeoutMs: Math.max(0, 5000 - (performance.now() - started)) });
+	} catch {
+		try { onFailure(); } catch { /* Load diagnostics cannot prevent settlement. */ }
+		return fallback;
+	}
+}
+
 /**
  * Build host-observed completion evidence using git reads only.
  *
@@ -84,11 +109,16 @@ const outcomeExit = (outcome: RunOutcome): CompletionManifest["exit"] => outcome
  * paths changed since the captured base commit.
  */
 export async function buildCompletionManifest(options: BuildCompletionManifestOptions): Promise<CompletionManifest> {
+	const read = (args: readonly string[]): Promise<string | undefined> => {
+		const closed = git(options.cwd, args, options.signal);
+		options.onGitRead?.(closed);
+		return closed;
+	};
 	const [headOutput, statusOutput, diffOutput, commitsOutput] = await Promise.all([
-		git(options.cwd, ["rev-parse", "HEAD"]),
-		git(options.cwd, ["status", "--porcelain=v1", "-z", "--untracked-files=all"]),
-		options.worktree ? git(options.cwd, ["diff", "--name-only", "-z", `${options.baseRef}..HEAD`]) : undefined,
-		git(options.cwd, ["rev-list", "--count", `${options.baseRef}..HEAD`]),
+		read(["rev-parse", "HEAD"]),
+		read(["status", "--porcelain=v1", "-z", "--untracked-files=all"]),
+		options.worktree ? read(["diff", "--name-only", "-z", `${options.baseRef}..HEAD`]) : undefined,
+		read(["rev-list", "--count", `${options.baseRef}..HEAD`]),
 	]);
 
 	const statusChangedPaths = statusOutput === undefined ? [] : statusPaths(statusOutput);

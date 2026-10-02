@@ -23,6 +23,7 @@ export const EXTENSION_RUNTIME_OUTPUTS = [
 	"sumocode-extension.bundle.mjs",
 	"sumocode-extension.bundle.mjs.map",
 	"steering-ack.effect.mjs",
+	"manifest.effect.mjs",
 	...EXTENSION_ASSETS.map(({ output }) => output),
 ];
 

@@ -21,7 +21,7 @@ import { instrumentPiStartup } from "./instrument-pi-startup.mjs";
 import { writeNativeBuildIdentity } from "./lib/native-artifact.mjs";
 import { assertNoEffectInEagerClosure, assertNoProductionDependencyLeakage, bundleJavaScriptText, moduleSpecifiers } from "./lib/production-boundaries.mjs";
 
-import { buildSteeringAckBundle, steeringAckBoundary } from "./lib/steering-ack-bundle.mjs";
+import { buildManifestBundle, buildSteeringAckBundle, steeringAckBoundary } from "./lib/steering-ack-bundle.mjs";
 
 const root = resolve(import.meta.dirname, "..");
 const require = createRequire(import.meta.url);
@@ -112,6 +112,8 @@ async function buildExtensionBundle(entryPoint, outPath) {
 	assertNoEffectInEagerClosure(result.metafile, entryPoint, `native extension bundle ${entryPoint}`);
 	const lazy = await buildSteeringAckBundle(root, dirname(outPath));
 	assertMetafileContainment(lazy.metafile);
+	const manifest = await buildManifestBundle(root, dirname(outPath));
+	assertMetafileContainment(manifest.metafile);
 	assertNoProductionDependencyLeakage(
 		result.metafile,
 		`native extension bundle ${entryPoint}`,
@@ -134,7 +136,7 @@ async function buildExtensionBundle(entryPoint, outPath) {
 	}
 	mkdirSync(dirname(outPath), { recursive: true });
 	writeFileSync(outPath, output.text);
-	for (const file of lazy.outputFiles) writeFileSync(file.path, file.contents);
+	for (const file of [...lazy.outputFiles, ...manifest.outputFiles]) writeFileSync(file.path, file.contents);
 	console.log(`[sumocode] extension bundle: ${outPath} (${output.text.length} bytes, externals: ${[...bareImports].join(", ") || "none"})`);
 }
 

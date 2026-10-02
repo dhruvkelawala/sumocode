@@ -14,7 +14,7 @@ import type { SpawnedChild } from "./backend-pi.js";
 import { SUBAGENT_MAX_QUEUED, SUBAGENT_MAX_RUNNING, type LiveToolState, type RunOutcome, type SubagentEvent, type SubagentLaunchFailure, type SubagentPaneRef, type SubagentRecoveryReason, type SubagentSnapshot, type SubagentWorktreeRef } from "./domain.js";
 import { planPlacement } from "./layout.js";
 import { addReportedSubagentUsage, evaluateSubagentBudget, validateSubagentBudget, type SubagentBudget } from "./budget-policy.js";
-import { buildCompletionManifest, type CompletionManifestEvidence } from "./manifest.js";
+import { buildCompletionManifest, collectCompletionManifest, type CompletionManifestEvidence } from "./manifest.js";
 import type { DeliveryPayload } from "./delivery.js";
 import { MCP_GATEWAY_TOOL, type ChildToolName } from "./task-config.js";
 import { resolveMcpLaunchCapability, type McpLaunchCapability } from "./mcp-capability.js";
@@ -26,7 +26,6 @@ const ERROR_TEXT_MAX = 4096;
 const CANCEL_WAIT_MS = 5_500;
 const CLOSE_WAIT_MS = 15_000;
 const GIT_READ_TIMEOUT_MS = 5_000;
-const MANIFEST_TIMEOUT_MS = 5_000;
 const VISIBLE_PANE_PROVISION_TOTAL_MS = 4_750;
 
 export interface SubagentCapacityTaskSummary {
@@ -117,6 +116,7 @@ export interface SubagentManagerDependencies {
 	readonly resolveWorktreeBaseRef?: WorktreeBaseRefResolver;
 	readonly captureGitContext?: (cwd: string) => Promise<SpawnGitContext>;
 	readonly buildCompletionManifest?: typeof buildCompletionManifest;
+	readonly collectCompletionManifest?: typeof collectCompletionManifest;
 	readonly terminalHost?: TerminalHost;
 	readonly pi?: PiExecLike;
 	/** Parent Herdr tab injected into the RPC child; first visible pane splits here. */
@@ -227,6 +227,8 @@ export class SubagentManager {
 	private readonly resolveWorktreeBaseRefImpl: WorktreeBaseRefResolver;
 	private readonly captureGitContextImpl: (cwd: string) => Promise<SpawnGitContext>;
 	private readonly buildCompletionManifestImpl: typeof buildCompletionManifest;
+	private readonly collectCompletionManifestImpl: typeof collectCompletionManifest;
+	private readonly manifestControllers = new Set<AbortController>();
 	private readonly terminalHost?: TerminalHost;
 	private readonly pi?: PiExecLike;
 	private initialVisibleTabId?: string;
@@ -257,6 +259,7 @@ export class SubagentManager {
 		this.resolveWorktreeBaseRefImpl = dependencies.resolveWorktreeBaseRef ?? ((path) => gitRead(path, ["rev-parse", "HEAD"]));
 		this.captureGitContextImpl = dependencies.captureGitContext ?? captureGitContext;
 		this.buildCompletionManifestImpl = dependencies.buildCompletionManifest ?? buildCompletionManifest;
+		this.collectCompletionManifestImpl = dependencies.collectCompletionManifest ?? collectCompletionManifest;
 		this.terminalHost = dependencies.terminalHost;
 		this.pi = dependencies.pi;
 		this.initialVisibleTabId = dependencies.initialVisibleTabId;
@@ -1109,6 +1112,7 @@ export class SubagentManager {
 	/** Stop legacy work and freeze retained recovery before targeted handoff or immediate detachment. */
 	public prepareForReplacement(): void {
 		this.lifecycleGeneration += 1;
+		for (const controller of this.manifestControllers) controller.abort();
 		clearTimeout(this.recoveryTimer);
 		this.recoveryTimer = undefined;
 		const queuedIds = this.queuedTasks.map((queued) => queued.id);
@@ -1125,6 +1129,7 @@ export class SubagentManager {
 	}
 
 	public disposeAll(): void {
+		for (const controller of this.manifestControllers) controller.abort();
 		for (const launch of this.launching.values()) launch.controller.abort();
 		clearInterval(this.healthTimer);
 		this.healthTimer = undefined;
@@ -1598,26 +1603,18 @@ export class SubagentManager {
 	}
 
 	private async collectManifest(snapshot: SubagentSnapshot, outcome: RunOutcome): Promise<CompletionManifestEvidence> {
-		const fallback: CompletionManifestEvidence = {
-			exit: outcome.kind,
-			durationMs: Math.max(0, Date.now() - snapshot.createdAt),
-		};
-		let timeout: ReturnType<typeof setTimeout> | undefined;
+		const controller = new AbortController();
+		this.manifestControllers.add(controller);
 		try {
-			return await Promise.race([
-				this.buildCompletionManifestImpl({
-					cwd: snapshot.cwd,
-					baseRef: snapshot.baseRef,
-					outcome,
-					startedAt: snapshot.createdAt,
-					worktree: snapshot.worktree,
-				}).catch(() => fallback),
-				new Promise<CompletionManifestEvidence>((resolve) => {
-					timeout = setTimeout(() => resolve(fallback), MANIFEST_TIMEOUT_MS);
-				}),
-			]);
+			return await this.collectCompletionManifestImpl({
+				cwd: snapshot.cwd, baseRef: snapshot.baseRef, outcome,
+				startedAt: snapshot.createdAt, worktree: snapshot.worktree, signal: controller.signal,
+			}, this.buildCompletionManifestImpl, () => {
+				try { this.onDiagnostic?.({ kind: "listener", message: "subagent manifest collection failed" }); }
+				catch { /* Diagnostics cannot reopen settlement. */ }
+			});
 		} finally {
-			if (timeout) clearTimeout(timeout);
+			this.manifestControllers.delete(controller);
 		}
 	}
 

@@ -5,7 +5,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { readPrivateJson } from "../activity/persistence.js";
-import type { CompletionManifest } from "./manifest.js";
+import { buildCompletionManifest, type CompletionManifest } from "./manifest.js";
+import { collectManifestWithin } from "./manifest-effect.js";
 import { CHILD_JSON_FRAME_MAX_BYTES } from "../child-protocol.js";
 import type { ProcessTreeOperations } from "../background-tasks/process-tree.js";
 import { createPiChildSpawner } from "./backend-pi.js";
@@ -66,6 +67,7 @@ function retainedFixture(attach = false, onManifestWritten?: () => void) {
 	const spawn = vi.fn(() => proc);
 	// SAFETY: fake piped process; the production backend parser owns these streams.
 	const backend = createPiChildSpawner(spawn as never, () => undefined, () => "/selected/pi", () => undefined, f.operations);
+	let manifestSignal: AbortSignal | undefined;
 	let releaseManifest!: (manifest: CompletionManifest) => void;
 	const manifest = new Promise<CompletionManifest>((resolve) => { releaseManifest = resolve; });
 	const subscriptions = vi.fn();
@@ -84,7 +86,9 @@ function retainedFixture(attach = false, onManifestWritten?: () => void) {
 				child.events(emit);
 			} };
 		},
-		buildManifest: () => manifest,
+		buildManifest: (options) => { manifestSignal = options.signal; return manifest; },
+		collectManifest: (options, build, onFailure) => collectManifestWithin({ options, build: build ?? buildCompletionManifest,
+			onFailure: onFailure ?? (() => undefined), timeoutMs: 5000, fallback: { exit: options.outcome.kind, durationMs: 1 } }),
 		onManifestWritten,
 	});
 	const release = (changedPaths: readonly string[] = []) => releaseManifest({ baseRef: "host-base", headRef: "host-head", changedPaths, commits: 0, exit: "completed", durationMs: 10 });
@@ -94,10 +98,27 @@ function retainedFixture(attach = false, onManifestWritten?: () => void) {
 		proc.emit("close", null, "SIGKILL");
 		for (let i = 0; i < 10; i++) await Promise.resolve();
 	};
-	return { ...f, proc, spawn, subscriptions, owner, release, finish };
+	return { ...f, proc, spawn, subscriptions, owner, release, finish, manifestSignal: () => manifestSignal };
 }
 
 describe("retained supervisor handle ownership", () => {
+	it("disposal interrupts manifest work without publishing durable pointers or a late completion", async () => {
+		const f = retainedFixture();
+		f.proc.emit("spawn");
+		await f.owner.ready;
+		await f.finish();
+		expect(f.manifestSignal()?.aborted).toBe(false);
+		const before = f.owner.record;
+		expect(before.status).toBe("settling");
+		f.owner.dispose();
+		expect(await f.owner.settlement).toBe("ambiguous");
+		expect(f.manifestSignal()?.aborted).toBe(true);
+		f.release(["late"]);
+		await new Promise((resolveTurn) => setImmediate(resolveTurn));
+		expect(f.owner.record).toEqual(before);
+		expect(f.owner.completion).toBeUndefined();
+		expect(existsSync(join(f.record.taskDir, "manifest.json"))).toBe(false);
+	});
 	it("persists the discovered child session before settlement", async () => {
 		const f = retainedFixture();
 		f.proc.emit("spawn");

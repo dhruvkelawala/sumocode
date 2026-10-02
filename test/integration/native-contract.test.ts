@@ -749,7 +749,10 @@ nativeDescribe("native executable contract", () => {
 		expect(session.getOutput()).toContain(CLEANUP_SEQUENCE);
 	}, 45_000);
 
-	it.each(["classic", "rpc"] as const)("keeps Effect cold through compiled Pi's %s extension readiness", async (profile) => {
+	it.each([
+		["classic", "steering-ack"], ["rpc", "steering-ack"],
+		["classic", "headless-cleanup"], ["rpc", "headless-cleanup"],
+	] as const)("keeps Effect cold through compiled Pi's %s extension readiness before %s", async (profile, subject) => {
 		const root = tempRoot("sumocode-native-steering-cold-");
 		const evidence = join(root, "cold.json");
 		const positive = join(root, "loaded.json");
@@ -763,7 +766,7 @@ Symbol.for = (key) => { if (key.startsWith("effect/") || key.startsWith("~effect
 export default function install(pi) {
 	pi.on("session_start", async () => {
 		writeFileSync(${JSON.stringify(evidence)}, JSON.stringify(symbols), { mode: 0o600 });
-		await import(${JSON.stringify(join(ARCHIVE, "extension/steering-ack.effect.mjs"))});
+		await import(${JSON.stringify(join(ARCHIVE, `extension/${subject}.effect.mjs`))});
 		writeFileSync(${JSON.stringify(positive)}, JSON.stringify(symbols), { mode: 0o600 });
 	});
 }

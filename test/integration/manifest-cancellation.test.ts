@@ -4,7 +4,7 @@ import { join, resolve } from "node:path";
 import { expect, it } from "vitest";
 import { spawnSupervisedApp } from "./harness-supervisor.js";
 
-it.each(["timeout", "dispose"])("%s terminates every manifest Git process before completion, with no stale publication", async (mode) => {
+it.each(["timeout", "dispose"])("%s bounds completion and drains Git groups including TERM-ignoring helpers, with no stale publication", async (mode) => {
 	const directory = mkdtempSync(join(tmpdir(), "sumocode-manifest-cancel-"));
 	const home = join(directory, "home");
 	mkdirSync(home);
@@ -23,10 +23,10 @@ it.each(["timeout", "dispose"])("%s terminates every manifest Git process before
 		});
 		if (exit.code !== 0) await launched.captureFailure(stdout);
 		expect(exit, stderr).toEqual({ code: 0, signal: null });
-		expect(JSON.parse(stdout.trim())).toEqual({ mode, gitProcesses: 3, survivors: 0, stalePublication: false });
+		expect(JSON.parse(stdout.trim())).toEqual({ mode, gitProcesses: 3, helpers: 3, survivors: 0, stalePublication: false });
 		expect(existsSync(join(directory, "late"))).toBe(false);
 		const evidence = JSON.parse(readFileSync(join(directory, "evidence.jsonl"), "utf8"));
 		expect(evidence.survivors).toBe(0);
-		expect(evidence.children).toHaveLength(3);
+		expect(evidence.children).toHaveLength(6);
 	} finally { await launched.terminate(); }
 }, 20_000);

@@ -84,7 +84,7 @@ it.effect("successful evidence cancels the deadline and drains the runtime", () 
 it.effect("the public deadline bounds delayed Git drain and freezes honest partial evidence", () => Effect.gen(function* () {
 	const f = yield* fixture();
 	let close: () => void = () => undefined;
-	const closed = new Promise<undefined>((resolve) => { close = () => resolve(undefined); });
+	const closed = new Promise<boolean>((resolve) => { close = () => resolve(true); });
 	f.build.mockImplementation((options) => {
 		options.onGitRead?.(closed);
 		return new Promise(() => undefined);
@@ -109,7 +109,7 @@ it.effect("the public deadline bounds delayed Git drain and freezes honest parti
 it.effect("drain proven inside the reserved budget returns partial evidence before the deadline", () => Effect.gen(function* () {
 	const f = yield* fixture();
 	let close: () => void = () => undefined;
-	const closed = new Promise<undefined>((resolve) => { close = () => resolve(undefined); });
+	const closed = new Promise<boolean>((resolve) => { close = () => resolve(true); });
 	f.build.mockImplementation((options) => {
 		options.onGitRead?.(closed);
 		return new Promise(() => undefined);
@@ -119,6 +119,17 @@ it.effect("drain proven inside the reserved budget returns partial evidence befo
 	yield* TestClock.adjust(4750);
 	close();
 	expect(yield* Fiber.join(fiber)).toEqual(f.collection.fallback);
+	f.assertDrained();
+}));
+
+it.effect("a bounded adapter receipt without group proof cannot publish complete-shaped evidence", () => Effect.gen(function* () {
+	const f = yield* fixture();
+	f.build.mockImplementation((options) => {
+		options.onGitRead?.(Promise.resolve(false));
+		return Promise.resolve(complete);
+	});
+	const fiber = yield* f.start();
+	expect(yield* Fiber.join(fiber)).toEqual({ ...f.collection.fallback, cleanup: "unproven" });
 	f.assertDrained();
 }));
 
@@ -155,7 +166,7 @@ it.effect.each(["deadline", "disposeAll", "prepareForReplacement"] as const)("%s
 		captureGitContext: async () => ({ baseRef: "base" }),
 		buildCompletionManifest: (options) => new Promise((resolve) => {
 			let close: () => void = () => undefined;
-			options.onGitRead?.(new Promise<undefined>((closed) => { close = () => closed(undefined); }));
+			options.onGitRead?.(new Promise<boolean>((closed) => { close = () => closed(true); }));
 			builders.push({ signal: options.signal, close, resolve });
 		}),
 		collectCompletionManifest: (options, build, onFailure) => collectManifestWithin({ options, build: build ?? buildCompletionManifest, onFailure: onFailure ?? (() => undefined), timeoutMs: 5000,

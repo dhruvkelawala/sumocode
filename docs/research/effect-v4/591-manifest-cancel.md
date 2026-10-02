@@ -23,8 +23,85 @@ runtime owner, completion ID, durable fence or performance sample is introduced.
 TestClock checks cover termination at 4.5s, proven drain at 4.75s, missing drain
 at 5s, and late receipts across deadline/disposal/replacement generations.
 
+## Review repair P2: owned Git groups
+
+Manifest Git reads now use `spawn(..., { detached: true })`; Node `execFile`
+does not forward `detached`. Each read owns the fresh PGID, stdout bound,
+watchdog, cancellation listener and a maximum 500ms cleanup window. TERM and
+KILL each get a 100ms empty-group wait. PATH-independent asynchronous `ps`
+probes (75ms timeout) bracket signalling with live spawn-handle or previously
+captured PID/birth anchors, reject the current group, and refuse an unknown or
+foreign group. Existing `systemProcessTree` helpers perform fresh-group signals
+and empty-group verification. There is no synchronous `ps` in the public
+collector/finalizer, new process service or Effect process/identity owner.
+
+A read receipt now separately reports whether both the group and pipes drained.
+A bounded but unproven receipt produces partial evidence with the cleanup marker,
+never complete-shaped or clean-checkout evidence. Cleanup has no completion
+publication capability; its referenced, bounded timer prevents a disposing idle
+Node owner from exiting between TERM and KILL. The receipt/adapter result is
+immutable once selected, even if `close` arrives later.
+
+Tradeoffs: POSIX ownership is the dedicated group, not a descendant that explicitly
+escapes it with setsid/daemonization (the existing process-tree policy). Unavailable
+or ambiguous identity probes fail closed and record unproven cleanup rather than
+signalling by a bare PID/PGID. Windows has no POSIX group guarantee here: its
+spawn handle is stopped, but group drain is reported unproven. No platform
+process owner or permission/identity fallback was added. No perf samples were
+collected; #589 acceptance remains separate.
+
+The default-mode real-process fixture now starts three Git leaders, each with a
+TERM-ignoring helper that does not inherit Git's pipes. Leaders exit on TERM;
+Git close cannot prove helper exit. The fixture joins actual drain receipts,
+checks all six PIDs absent and all three groups empty, freezes old completion,
+and independently collects the next generation. Disposal may publish unproven
+cleanup before drain; the fixture verifies the eventual proof without upgrading
+that publication. Its failure cleanup uses only captured owned birth anchors.
+
+### Repair verification and review-ready gate
+
+Node 24.15.0, pnpm 10.29.2 via the prescribed CLI, pinned Bun 1.4.0 for build
+guards; unit `TMPDIR=/private/tmp`, serial file execution on the shared Mac.
+Final production code: 264 unit files, **4,502 passed, 2 skipped**; seven targeted
+manifest/manager/adoption/supervisor/reconstruction/prompt files **290/290**;
+seven bundle/lazy-load/build/policy/wait-classification files **195/195**.
+Typecheck, build, host/extension builds and lint pass (only four existing scratch
+warnings). Default selected-file integration **2/2**, harness seam checks
+**187/187**, outer audit **zero survivors across six registered groups**. The
+fixture additionally verifies its detached Git groups, including six PIDs per
+case; the outer registered-only audit is not substituted for that check.
+
+Logs: `/private/tmp/sumo-591-review-final-{unit,targeted,integration,lint}.log`
+and `/private/tmp/sumo-591-review-guards.log`. No full integration/native/visual
+lane, perf sample, golden promotion, PR, merge or tag was run locally. Remote
+workflow identities and conclusions are reported with the pushed repair HEAD,
+without reruns.
+
+Review-ready gate:
+- Contract: public `~/code/skills/skills/review-ready/contract.md`; no repository
+  override found at its documented locations.
+- Changed seam/trace: child outcome → lazy collector → evidence cutoff → owned
+  Git group TERM/KILL/drain → deadline-bounded immutable evidence → unchanged
+  manager/durable completion publication.
+- **Caller-knowledge:** plain Promise/value interfaces remain; builder wrappers
+  forward cancellation and proof receipts. **Deletion:** removal would spread
+  cancellation/drain policy into both settlement callers. **Ownership:** the
+  collector owns availability; the plain Git adapter owns transient process
+  groups; existing manager/supervisor modules retain publication authority.
+  **Test-surface:** TestClock drives the public collector and manager, retained
+  reconstruction validates real private artifacts, and supervised real OS
+  processes prove signals/group emptiness independently of simulated clocks.
+- Simplification pass: reused existing fresh-group signalling/empty-group waits
+  and trusted ps resolution, kept only a manifest-local bounded census, removed
+  redundant iterable copying, and introduced no process service or dependency.
+- Verification: results above. Exceptions/limits: fail-closed unknown identity,
+  POSIX dedicated-group ownership and Windows unproven group cleanup as described
+  above; #589 performance budgets remain pending separately. Heavy local lanes
+  intentionally delegated by the user.
+
 The original implementation/evidence record below describes the reviewed base;
-its post-deadline drain tradeoff is superseded by this repair.
+its post-deadline drain and immediate-PID-only termination tradeoffs are
+superseded by these repairs.
 
 ## Boundary and behavior
 

@@ -24,7 +24,7 @@ function reportFailure(collection: ManifestCollection): void {
 export async function collectManifestWithin(collection: ManifestCollection, clock?: Clock.Clock): Promise<CompletionManifestEvidence> {
 	if (collection.options.signal?.aborted || collection.timeoutMs <= 0) return collection.fallback;
 	const controller = new AbortController();
-	const reads = new Set<Promise<string | undefined>>();
+	const reads = new Set<Promise<boolean>>();
 	let cleanupFailed = false;
 	const partial = (): CompletionManifestEvidence => reads.size || cleanupFailed
 		? { ...collection.fallback, cleanup: "unproven" } : collection.fallback;
@@ -33,7 +33,7 @@ export async function collectManifestWithin(collection: ManifestCollection, cloc
 		try {
 			void collection.build({ ...collection.options, signal: controller.signal, onGitRead: (closed) => {
 				reads.add(closed);
-				void closed.then(() => { reads.delete(closed); }, () => { reads.delete(closed); cleanupFailed = true; });
+				void closed.then((proven) => { reads.delete(closed); if (!proven) cleanupFailed = true; }, () => { reads.delete(closed); cleanupFailed = true; });
 			} }).then(
 				(result) => { if (!controller.signal.aborted) resume(Effect.succeed(result)); },
 				() => { if (!controller.signal.aborted) { reportFailure(collection); resume(Effect.succeed(partial())); } },
@@ -46,7 +46,7 @@ export async function collectManifestWithin(collection: ManifestCollection, cloc
 	const program = Effect.fn("collectCompletionManifest")(function* () {
 		// Reserve 500ms inside the original budget. Drain is interruptible, never a finalizer.
 		const evidence = yield* Effect.raceFirst(work, Effect.sleep(Math.max(0, collection.timeoutMs - 500)).pipe(Effect.as(collection.fallback)));
-		yield* Effect.promise(() => Promise.allSettled([...reads]));
+		yield* Effect.promise(() => Promise.allSettled(reads));
 		return cleanupFailed ? partial() : evidence;
 	});
 	const runtime = ManagedRuntime.make(clock ? Layer.succeed(Clock.Clock, clock) : Layer.empty);

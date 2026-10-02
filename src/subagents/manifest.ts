@@ -1,7 +1,10 @@
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
+import { systemProcessTree, type ProcessTreeMemberAnchor } from "../background-tasks/process-tree.js";
+import { resolvePsBinary } from "../background-tasks/ps-binary.js";
 import type { RunOutcome } from "./domain.js";
 
 const GIT_TIMEOUT_MS = 4_500;
+const GIT_CLEANUP_MS = 500;
 
 export interface CompletionManifest {
 	readonly baseRef: string;
@@ -32,8 +35,8 @@ export interface CompletionManifestWorktree {
 
 export interface BuildCompletionManifestOptions {
 	readonly signal?: AbortSignal;
-	/** Collector-owned close receipts; wrappers must forward these options. */
-	readonly onGitRead?: (closed: Promise<string | undefined>) => void;
+	/** Collector-owned receipts: true proves both group emptiness and pipe close. */
+	readonly onGitRead?: (drained: Promise<boolean>) => void;
 	readonly cwd: string;
 	readonly baseRef: string;
 	readonly outcome: RunOutcome;
@@ -41,25 +44,101 @@ export interface BuildCompletionManifestOptions {
 	readonly worktree?: CompletionManifestWorktree;
 }
 
-function git(cwd: string, args: readonly string[], signal?: AbortSignal): Promise<string | undefined> {
-	if (signal?.aborted) return Promise.resolve(undefined);
-	return new Promise<string | undefined>((resolve) => {
-		let output: string | undefined;
-		const child = execFile("git", ["-C", cwd, ...args], {
-			encoding: "utf8",
-			timeout: GIT_TIMEOUT_MS,
-			killSignal: "SIGKILL",
-			maxBuffer: 10 * 1024 * 1024,
-		}, (error, stdout) => { output = error ? undefined : stdout; });
-		// Node's signal option rejects at abort, before close. Own the handle so
-		// the Promise instead proves this read's process and pipes have ended.
-		const stop = (): void => { child.kill("SIGKILL"); };
-		signal?.addEventListener("abort", stop, { once: true });
-		child.once("close", () => {
-			signal?.removeEventListener("abort", stop);
-			resolve(signal?.aborted ? undefined : output);
+/** Bounded, PATH-independent probes keep ps latency outside the public finalizer. */
+function gitGroupMembers(pgid: number): Promise<readonly ProcessTreeMemberAnchor[] | undefined> {
+	return new Promise<readonly ProcessTreeMemberAnchor[] | undefined>((resolve) => {
+		execFile(resolvePsBinary(), ["-axo", "pid=,pgid=,lstart="], { encoding: "utf8", timeout: 75, killSignal: "SIGKILL", maxBuffer: 10 * 1024 * 1024 }, (error, output) => {
+			if (error) { resolve(undefined); return; }
+			const members: ProcessTreeMemberAnchor[] = [];
+			let currentGroup: number | undefined;
+			for (const row of output.split("\n")) {
+				const match = row.trim().match(/^(\d+)\s+(\d+)\s+(.+)$/);
+				if (!match) continue;
+				const pid = Number(match[1]);
+				const group = Number(match[2]);
+				if (pid === process.pid) currentGroup = group;
+				if (group === pgid) members.push({ pid, processStartTime: match[3]!.trim() });
+			}
+			resolve(currentGroup === undefined || currentGroup === pgid ? undefined : members);
 		});
 	}).catch(() => undefined);
+}
+
+interface GitRead {
+	readonly output?: string;
+	readonly cleanupProven: boolean;
+}
+
+function git(cwd: string, args: readonly string[], signal?: AbortSignal): Promise<GitRead> {
+	if (signal?.aborted) return Promise.resolve({ cleanupProven: true });
+	let child;
+	try { child = spawn("git", ["-C", cwd, ...args], { detached: true, stdio: ["ignore", "pipe", "pipe"] }); }
+	catch { return Promise.resolve({ cleanupProven: true }); }
+	return new Promise<GitRead>((resolve) => {
+		let output: string | undefined = "";
+		let outputBytes = 0;
+		let closed = false;
+		let stopping = false;
+		let finished = false;
+		let cleanupTimer: ReturnType<typeof setTimeout> | undefined;
+		child.stdout.setEncoding("utf8");
+		child.stdout.on("data", (chunk: string) => {
+			outputBytes += Buffer.byteLength(chunk);
+			if (outputBytes > 10 * 1024 * 1024) { output = undefined; stop(); }
+			else if (output !== undefined) output += chunk;
+		});
+		child.stderr.resume();
+		child.once("error", () => { output = undefined; });
+		const pid = child.pid;
+		// Only the dedicated group from this spawn is eligible; never a positive PID fallback on POSIX.
+		const identity = pid && pid > 1 && pid !== process.pid ? { pid, processGroupId: pid, processStartTime: "" } : undefined;
+		const initial = identity && process.platform !== "win32" ? gitGroupMembers(identity.pid).then((members) =>
+			child.exitCode === null && child.signalCode === null ? members : undefined) : Promise.resolve(undefined);
+		const finish = (cleanupProven: boolean): void => {
+			if (finished) return;
+			finished = true;
+			clearTimeout(watchdog);
+			clearTimeout(cleanupTimer);
+			signal?.removeEventListener("abort", stop);
+			resolve({ output: stopping || signal?.aborted || !cleanupProven ? undefined : output, cleanupProven });
+		};
+		const empty = (): boolean => identity !== undefined && process.platform !== "win32" && systemProcessTree.isTreeEmpty(identity);
+		const stop = (): void => {
+			if (stopping || finished) return;
+			stopping = true;
+			// Referenced and bounded: disposal must not let Node exit between TERM and KILL.
+			cleanupTimer = setTimeout(() => { finish(false); }, GIT_CLEANUP_MS);
+			void (async () => {
+				if (!identity || process.platform === "win32") { child.kill("SIGKILL"); finish(false); return; }
+				let anchors = await initial;
+				for (const signalName of ["SIGTERM", "SIGKILL"] as const) {
+					if (finished) return;
+					if (empty()) { if (closed) finish(true); return; }
+					const members = await gitGroupMembers(identity.pid);
+					if (finished) return;
+					// Bracket the census with live spawn-handle/previous birth anchors. Leader close alone is not authority.
+					const owned = members?.some((member) =>
+						(member.pid === identity.pid && child.exitCode === null && child.signalCode === null) ||
+						anchors?.some((anchor) => anchor.pid === member.pid && anchor.processStartTime === member.processStartTime));
+					if (!owned || !members) { finish(empty() && closed); return; }
+					anchors = members;
+					const sent = await (systemProcessTree.signalFreshTree ?? systemProcessTree.signalTree.bind(systemProcessTree))(identity, signalName);
+					if (!sent.ok) { finish(false); return; }
+					if (await systemProcessTree.waitForTreeEmpty(identity, 100)) { if (closed) finish(true); return; }
+				}
+				finish(false);
+			})().catch(() => { finish(false); });
+		};
+		const watchdog = setTimeout(stop, GIT_TIMEOUT_MS);
+		signal?.addEventListener("abort", stop, { once: true });
+		child.once("close", (code) => {
+			closed = true;
+			if (code !== 0) output = undefined;
+			if (!identity || empty()) finish(true);
+			else stop();
+		});
+		if (signal?.aborted) stop();
+	}).catch(() => ({ cleanupProven: false }));
 }
 
 function statusPaths(output: string): string[] {
@@ -112,9 +191,9 @@ export async function collectCompletionManifest(
  */
 export async function buildCompletionManifest(options: BuildCompletionManifestOptions): Promise<CompletionManifest> {
 	const read = (args: readonly string[]): Promise<string | undefined> => {
-		const closed = git(options.cwd, args, options.signal);
-		options.onGitRead?.(closed);
-		return closed;
+		const drained = git(options.cwd, args, options.signal);
+		options.onGitRead?.(drained.then((result) => result.cleanupProven));
+		return drained.then((result) => result.output);
 	};
 	const [headOutput, statusOutput, diffOutput, commitsOutput] = await Promise.all([
 		read(["rev-parse", "HEAD"]),

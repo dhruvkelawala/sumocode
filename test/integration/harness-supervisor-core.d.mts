@@ -57,7 +57,7 @@ export declare function captureTimeoutEvidence(input: TimeoutEvidenceInput): Pro
 export declare function waitForDiagnosticReadiness(diagPath: string, state: ReadinessState, timeoutMs: number): Promise<DiagnosticReadinessEvent>;
 export declare function spawnSupervisedApp(command: string, args: readonly string[], options?: SpawnOptions, ports?: readonly number[]): SupervisedProcess;
 export declare function spawnSupervisedProcess(command: string, args: readonly string[], options?: SpawnOptions): SupervisedProcess;
-export declare function spawnSupervisedPty(command: string, args: readonly string[], options: IPtyForkOptions, evidence: ChildEvidenceContext, auth: HarnessAuth, sandboxApp?: boolean): {
+export declare function spawnSupervisedPty(command: string, args: readonly string[], options: IPtyForkOptions, evidence: ChildEvidenceContext, auth: HarnessAuth, sandboxApp?: boolean, ports?: readonly number[]): {
     child: IPty;
     supervision: Pick<SupervisedProcess, "pid" | "pgid" | "evidence" | "terminate" | "captureFailure">;
 };

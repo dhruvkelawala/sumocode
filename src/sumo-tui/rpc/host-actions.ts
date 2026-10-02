@@ -44,7 +44,7 @@ import { listAllSessionsForSession, listProjectSessions, type SessionListInfo } 
 import { buildSessionTreeFromEntries, currentTreeSelection, entryTimestampsFromEntries, flattenSessionTree, formatRelativeTime, sessionExcerpt, treeNodeSummary, treeRowTimestamp } from "./session-tree.js";
 import { readAuthoritativeSessionSnapshot } from "./session-snapshot.js";
 import { RPC_PROMPT_DELIVERY_LABELS, rpcPromptDeliveryModeFrom, toggleRpcPromptDelivery, type RpcHostChromeState, type RpcHostStateStore } from "./state.js";
-import type { RpcPromptDeliveryMode } from "./prompt-scheduler.js";
+import type { RpcQueueMode } from "./prompt-scheduler.js";
 
 export const RPC_HOST_COMMAND_PALETTE_INPUT = "\u001f";
 
@@ -75,6 +75,8 @@ export interface RpcHostActionsOptions {
 	 */
 	readonly inlineSelectors: HostInlineSelectors;
 	readonly notifications: HostNotifications;
+	/** Whether `auto` queue mode can reach Jev; without it `auto` steers. */
+	readonly autoDeliveryAvailable?: boolean;
 	readonly editorText?: EditorTextController;
 	readonly onStateChange?: (state?: RpcHostChromeState) => void;
 	readonly onRenderRequest?: () => void;
@@ -135,7 +137,7 @@ export const RPC_HOST_SLASH_COMMANDS: readonly RpcHostSlashCommand[] = Object.fr
 	{ name: "login", description: "Configure provider authentication" },
 	{ name: "model", description: "Select model or set provider/model" },
 	{ name: "thinking", description: "Select thinking level" },
-	{ name: "queue", description: "Set prompt delivery: steer or follow-up" },
+	{ name: "queue", description: "Set prompt delivery: steer, follow-up, or auto" },
 	{ name: "theme", description: "Select SumoCode theme" },
 	{ name: "sumo:theme", description: "Select SumoCode theme" },
 	{ name: "compact", description: "Manually compact the session context" },
@@ -507,6 +509,7 @@ export class RpcHostActions {
 	private readonly overlays: RpcHostOverlayManager;
 	private readonly inlineSelectors: HostInlineSelectors;
 	private readonly notifications: HostNotifications;
+	private readonly autoDeliveryAvailable: boolean;
 	private readonly editorText: EditorTextController | undefined;
 	private readonly onStateChange: (state?: RpcHostChromeState) => void;
 	private readonly onRenderRequest: () => void;
@@ -534,6 +537,7 @@ export class RpcHostActions {
 		this.overlays = options.overlays;
 		this.inlineSelectors = options.inlineSelectors;
 		this.notifications = options.notifications;
+		this.autoDeliveryAvailable = options.autoDeliveryAvailable ?? false;
 		this.editorText = options.editorText;
 		this.onStateChange = options.onStateChange ?? (() => undefined);
 		this.onRenderRequest = options.onRenderRequest ?? (() => undefined);
@@ -702,19 +706,26 @@ export class RpcHostActions {
 	}
 
 	/**
-	 * Select how a busy-turn submission is delivered: `steer` (default) injects
-	 * it into the running turn, `follow-up` queues a new turn. Session-scoped:
-	 * the selection lives in chrome state only and is never persisted.
+	 * Select how a busy-turn submission is delivered: `steer` injects it into the
+	 * running turn, `follow-up` queues a new turn, and `auto` lets Jev pick per
+	 * message. A session starts in `auto` when `TYPESAFE_API_KEY` is set, else
+	 * `steer`; the toggle key flips steer/follow-up and leaves auto for steer.
+	 * Session-scoped: the selection lives in chrome state only and is never persisted.
 	 */
 	public toggleQueueDeliveryMode(): void {
 		this.setQueueDeliveryMode(toggleRpcPromptDelivery(this.currentQueueDeliveryMode()));
 	}
 
-	private currentQueueDeliveryMode(): RpcPromptDeliveryMode {
+	private currentQueueDeliveryMode(): RpcQueueMode {
 		return this.stateStore.getSnapshot().promptDeliveryMode ?? "steer";
 	}
 
-	private setQueueDeliveryMode(mode: RpcPromptDeliveryMode): void {
+	private setQueueDeliveryMode(mode: RpcQueueMode): void {
+		// Without a key auto is unavailable: keep the current selection and name it.
+		if (mode === "auto" && !this.autoDeliveryAvailable) {
+			notify(this.notifications, `no TYPESAFE_API_KEY · still ${RPC_PROMPT_DELIVERY_LABELS[this.currentQueueDeliveryMode()]}`, "warning");
+			return;
+		}
 		this.onStateChange(this.stateStore.setPromptDeliveryMode(mode));
 		// Transient (the notification centre expires it): the mode is worth naming
 		// at the moment it changes, not in every hint row afterwards.
@@ -728,7 +739,7 @@ export class RpcHostActions {
 			return;
 		}
 		if (args.trim()) {
-			notify(this.notifications, "queue mode takes steer or follow-up", "warning");
+			notify(this.notifications, "queue mode takes steer, follow-up, or auto", "warning");
 			return;
 		}
 		this.toggleQueueDeliveryMode();

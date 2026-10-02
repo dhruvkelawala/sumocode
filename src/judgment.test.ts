@@ -1,0 +1,96 @@
+import { describe, expect, it } from "vitest";
+import { judgeChoice, typesafeChoiceClassifier, type ChoiceClassifier, type ChoiceQuestion } from "./judgment.js";
+
+const question: ChoiceQuestion<"yes" | "no"> = {
+	instructions: "Is `message` a greeting?",
+	criteria: { yes: "A greeting", no: "Anything else" },
+};
+
+function answering(choice: string, confidence = 0.9): ChoiceClassifier {
+	return async () => ({ choice, confidence });
+}
+
+describe("judgeChoice", () => {
+	it("returns the classifier's choice when it is one of the question's options", async () => {
+		await expect(judgeChoice(answering("yes", 0.8), { message: "hi" }, question)).resolves.toEqual({ choice: "yes", confidence: 0.8 });
+	});
+
+	it("drops a choice the question never offered", async () => {
+		await expect(judgeChoice(answering("maybe"), { message: "hi" }, question)).resolves.toBeUndefined();
+	});
+
+	it("drops a confidence outside 0..1 instead of trusting the classifier", async () => {
+		await expect(judgeChoice(answering("yes", Number.NaN), { message: "hi" }, question)).resolves.toBeUndefined();
+		await expect(judgeChoice(answering("yes", 5), { message: "hi" }, question)).resolves.toBeUndefined();
+	});
+
+	it("resolves undefined when the classifier fails", async () => {
+		const failing: ChoiceClassifier = async () => {
+			throw new Error("network down");
+		};
+		await expect(judgeChoice(failing, { message: "hi" }, question)).resolves.toBeUndefined();
+	});
+
+	it("gives up at the timeout instead of waiting for a slow classifier", async () => {
+		const slow: ChoiceClassifier = (_state, _question, signal) => new Promise((_resolve, reject) => {
+			signal.addEventListener("abort", () => reject(signal.reason));
+		});
+		const started = Date.now();
+		await expect(judgeChoice(slow, { message: "hi" }, question, 20)).resolves.toBeUndefined();
+		expect(Date.now() - started).toBeLessThan(1_000);
+	});
+
+	it("resolves instead of throwing for a zero or negative timeout", async () => {
+		const never: ChoiceClassifier = () => new Promise(() => undefined);
+		await expect(judgeChoice(never, { message: "hi" }, question, 0)).resolves.toBeUndefined();
+		await expect(judgeChoice(never, { message: "hi" }, question, -5)).resolves.toBeUndefined();
+	});
+
+	it("bounds the wait even when the transport ignores the abort signal", async () => {
+		const stubborn: ChoiceClassifier = () => new Promise((resolve) => setTimeout(() => resolve({ choice: "yes", confidence: 1 }), 500));
+		const started = Date.now();
+		await expect(judgeChoice(stubborn, { message: "hi" }, question, 20)).resolves.toBeUndefined();
+		expect(Date.now() - started).toBeLessThan(400);
+	});
+});
+
+describe("typesafeChoiceClassifier", () => {
+	function fetchReturning(status: number, body: string, requests: Request[] = []): typeof fetch {
+		return async (input, init) => {
+			requests.push(new Request(input, init));
+			return new Response(body, { status });
+		};
+	}
+
+	it("asks Jev one choice question and reads its answer", async () => {
+		const requests: Request[] = [];
+		const body = JSON.stringify({ answers: { answer: { type: "choice", choice: "yes", confidence: 0.94, probabilities: { yes: 0.97, no: 0.03 } } } });
+		const classify = typesafeChoiceClassifier("ts-key", undefined, fetchReturning(200, body, requests));
+
+		await expect(classify({ message: "hi" }, question, new AbortController().signal)).resolves.toEqual(
+			expect.objectContaining({ choice: "yes", confidence: 0.94 }),
+		);
+		const [request] = requests;
+		expect(request?.url).toBe("https://api.typesafe.ai/v1/systemone");
+		expect(request?.headers.get("authorization")).toBe("Bearer ts-key");
+		await expect(request?.json()).resolves.toEqual({
+			model: "jev-latest",
+			state: { message: "hi" },
+			questions: { answer: { type: "choice", instructions: question.instructions, criteria: question.criteria } },
+		});
+	});
+
+	it("posts to a TYPESAFE_BASE_URL-style API root instead of the default", async () => {
+		const requests: Request[] = [];
+		await typesafeChoiceClassifier("k", "http://127.0.0.1:9/", fetchReturning(500, "", requests))({ message: "hi" }, question, new AbortController().signal);
+		expect(requests[0]?.url).toBe("http://127.0.0.1:9/v1/systemone");
+	});
+
+	it("returns undefined for an error status or a malformed body", async () => {
+		const signal = new AbortController().signal;
+		await expect(typesafeChoiceClassifier("k", undefined, fetchReturning(401, "{}"))({ message: "hi" }, question, signal)).resolves.toBeUndefined();
+		await expect(typesafeChoiceClassifier("k", undefined, fetchReturning(200, "<html>proxy error</html>"))({ message: "hi" }, question, signal)).resolves.toBeUndefined();
+		await expect(typesafeChoiceClassifier("k", undefined, fetchReturning(200, '{"answers":{"answer":{"choice":3}}}'))({ message: "hi" }, question, signal)).resolves.toBeUndefined();
+		await expect(typesafeChoiceClassifier("k", undefined, fetchReturning(200, '{"answers":{"answer":{"choice":"yes","confidence":42}}}'))({ message: "hi" }, question, signal)).resolves.toBeUndefined();
+	});
+});

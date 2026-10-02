@@ -13,6 +13,18 @@ landed between the original scaffold and this release.
 ### Removed
 - Memory/Remnic support: extraction, sidebar memory, Memory Scriptorium, `/sumo:memory`, palette entries, and the `learning` / `INSCRIBING` indicator. Persona and `APPEND_SYSTEM.md` support are unchanged; existing private memory data is untouched.
 
+### Added
+- **`/queue auto`, the default with a TypeSafe key** — TypeSafe's Jev
+  classifier picks steer or follow-up for each message sent while the agent is
+  busy. Sessions start in `auto` when `TYPESAFE_API_KEY` is set (otherwise
+  `steer`); the message and the prompt that started the run go to TypeSafe.
+  Jev must be confident to choose follow-up, and anything else, including a
+  timeout or an error, steers. `/queue steer` or `/queue follow-up` turns it off
+  for the session, and the delivery toggle key leaves it for `steer`. Without a
+  key, `/queue auto` keeps the current mode and says so. `TYPESAFE_BASE_URL`
+  overrides the API root, as in TypeSafe's SDKs. The classifier call lives in a
+  reusable `judgeChoice` primitive (`src/judgment.ts`). #615
+
 ## [0.7.6] — 2026-09-30
 
 The Herdr sidebar can show what each SumoCode agent is working on.

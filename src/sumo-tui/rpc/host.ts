@@ -27,7 +27,7 @@ import { RpcChildExitError, SumoRpcClient, truncateForNotification } from "./cli
 import { ChromeCacheWorkerClient } from "./chrome-cache-worker-client.js";
 import type { CachedChrome } from "./chrome-cache.js";
 import { RpcHostLifecycle, writeExitCodeFile } from "./host-lifecycle.js";
-import { modelOptionsFrom, RpcHostControls, type RpcModelOption, type RpcThinkingLevel } from "./controls.js";
+import { modelOptionsFrom, RpcHostControls, type RpcClearedQueue, type RpcModelOption, type RpcThinkingLevel } from "./controls.js";
 import { createRpcKeybindingsManager, RpcHostEditorController } from "./editor.js";
 import { createRpcExtensionUiResponder } from "./extension-ui-responder.js";
 import { InMemoryRpcTreeNavigationOutcomeBroker, type RpcTreeNavigationRequest } from "../pi-compat/tree-navigation-command.js";
@@ -45,9 +45,11 @@ import {
 	createRpcPromptScheduler,
 	RpcPromptPreflightRejection,
 	type RpcPromptDelivery,
-	type RpcPromptDeliveryMode,
 	type RpcPromptScheduler,
+	type RpcQueueMode,
 } from "./prompt-scheduler.js";
+import { createJevDeliveryDecider } from "./auto-delivery.js";
+import { typesafeChoiceClassifier } from "../../judgment.js";
 import { RpcHostRuntime } from "./runtime.js";
 import { responseData } from "./response.js";
 import { notifyOnError, type ErrorNotifier } from "./safe-send.js";
@@ -449,7 +451,7 @@ export interface RpcPromptSendOptions {
 	readonly images?: ImageContent[];
 }
 
-export async function sendRpcPrompt(message: string, options: RpcPromptSendOptions): Promise<void> {
+export async function sendRpcPrompt(message: string, options: RpcPromptSendOptions): Promise<string | undefined> {
 	// Pi 0.85.1+ clear_queue returns text only. Image prompts must omit
 	// streamingBehavior so Pi atomically rejects an idle-to-busy race instead
 	// of creating an attachment queue entry SumoCode cannot recover.
@@ -466,7 +468,7 @@ export async function sendRpcPrompt(message: string, options: RpcPromptSendOptio
 			throw new RpcPromptPreflightRejection(error instanceof Error ? error.message : String(error));
 		}
 	}
-	responseData(response, "prompt");
+	return responseData(response, "prompt")?.disposition;
 }
 
 interface DirectBashCompletion {
@@ -627,7 +629,7 @@ export interface RpcPromptSubmitOptions {
 	readonly stateStore?: Pick<RpcHostStateStore, "getSnapshot">;
 	readonly client: Pick<SumoRpcClient, "send">;
 	readonly onBeforeSend?: (message: string) => void;
-	readonly delivery?: RpcPromptDeliveryMode;
+	readonly delivery?: RpcQueueMode;
 }
 
 export async function submitRpcPrompt(message: string, options: RpcPromptSubmitOptions): Promise<void> {
@@ -650,21 +652,21 @@ export interface EditorSubmitReadinessGate {
 export interface EditorSubmitHandlerDependencies {
 	readonly gate: EditorSubmitReadinessGate;
 	readonly notifications: ErrorNotifier;
-	readonly submit: (message: string, delivery?: RpcPromptDeliveryMode) => Promise<void>;
+	readonly submit: (message: string, delivery?: RpcQueueMode) => Promise<void>;
 	readonly submitImageDraft?: (draft: RpcEditorSubmissionDraft) => Promise<void>;
 	readonly requestExit: (code: number) => void;
 	readonly isTreeBusy: () => boolean;
 }
 
 export interface EditorSubmitHandlers {
-	readonly fromEditor: (message: string, delivery?: RpcPromptDeliveryMode) => Promise<void>;
-	readonly fromEditorDraft: (draft: RpcEditorSubmissionDraft, delivery?: RpcPromptDeliveryMode) => Promise<void>;
+	readonly fromEditor: (message: string, delivery?: RpcQueueMode) => Promise<void>;
+	readonly fromEditorDraft: (draft: RpcEditorSubmissionDraft, delivery?: RpcQueueMode) => Promise<void>;
 	readonly fromLaunch: (message: string) => Promise<void>;
 }
 
 /** Keeps early editing responsive while command dispatch waits for hydration. */
 export function createEditorSubmitHandlers(deps: EditorSubmitHandlerDependencies): EditorSubmitHandlers {
-	const submit = async (message: string, notifyWhenQueued: boolean, delivery?: RpcPromptDeliveryMode): Promise<void> => {
+	const submit = async (message: string, notifyWhenQueued: boolean, delivery?: RpcQueueMode): Promise<void> => {
 		const trimmed = message.trim();
 		if (trimmed.length === 0) return;
 		// /quit is entirely host-owned and must remain available when the child
@@ -817,13 +819,29 @@ export function createRpcQueueRestoreTransaction(deps: RpcQueueRestoreDependenci
 			deps.notifications.dismissSticky?.();
 			const sessionId = deps.stateStore.getSnapshot().sessionId;
 			const generation = deps.getGeneration?.();
-			const cleared = await deps.controls.clearQueue();
+			// Take the local queue before awaiting Pi: a message whose `auto` delivery Jev
+			// decides during the clear would otherwise be sent after it and escape the restore.
+			const local = deps.scheduler.restoreAll("");
+			const keepLocal = (): void => {
+				if (local.count === 0) return;
+				const draft = deps.editor.getText();
+				deps.editor.setText(draft.length > 0 ? `${local.text}\n\n${draft}` : local.text);
+			};
+			let cleared: RpcClearedQueue;
+			try {
+				cleared = await deps.controls.clearQueue();
+			} catch (error) {
+				keepLocal();
+				throw error;
+			}
 			if (deps.stateStore.getSnapshot().sessionId !== sessionId || deps.getGeneration?.() !== generation) {
+				keepLocal();
 				throw new Error("queue owner changed during clear");
 			}
-			const local = deps.scheduler.restoreAll(deps.editor.getText());
 			const restored = [...cleared.steering, ...cleared.followUp];
-			if (local.text.length > 0) restored.push(local.text);
+			if (local.count > 0) restored.push(local.text);
+			const draft = deps.editor.getText();
+			if (restored.length > 0 && draft.length > 0) restored.push(draft);
 			if (restored.length > 0) deps.editor.setText(restored.join("\n\n"));
 			deps.onStateChange?.(deps.stateStore.clearPiQueueProjection());
 			if (restored.some((text) => /pi-clipboard-[\w-]+\.(?:png|jpe?g|gif|webp)/i.test(text))) {
@@ -1508,7 +1526,14 @@ async function runRpcHostSession(options: RpcHostMainOptions, lifecycle: RpcHost
 			},
 		});
 	};
+	const typesafeApiKey = env.TYPESAFE_API_KEY?.trim();
+	const decideDelivery = typesafeApiKey
+		? createJevDeliveryDecider(typesafeChoiceClassifier(typesafeApiKey, env.TYPESAFE_BASE_URL?.trim() || undefined))
+		: undefined;
+	// With a key, Jev picks each busy message's delivery from the start; without one auto could only steer.
+	if (decideDelivery) stateStore.setPromptDeliveryMode("auto");
 	const scheduler = createRpcPromptScheduler({
+		decideDelivery,
 		getBusy: () => {
 			const state = stateStore.getSnapshot();
 			return treeNavigationBusy || state.isStreaming || state.isCompacting;
@@ -1540,6 +1565,8 @@ async function runRpcHostSession(options: RpcHostMainOptions, lifecycle: RpcHost
 		onReady: () => {
 			if (lifecycle.stopping) return;
 			lifecycle.markCommandReady();
+			// Auto sends busy messages to TypeSafe, so say once that a session starts in it.
+			if (stateStore.getSnapshot().promptDeliveryMode === "auto") notifications.notify("queue mode: auto · Jev decides");
 			// The RPC child polls this private gate without touching the Pi command
 			// stream; wrappers inherit the path and cannot swallow the readiness cue.
 			// The state root is not guaranteed to exist yet on source-mode runs, and
@@ -2094,6 +2121,7 @@ async function runRpcHostSession(options: RpcHostMainOptions, lifecycle: RpcHost
 		overlays,
 		inlineSelectors,
 		notifications,
+		autoDeliveryAvailable: decideDelivery !== undefined,
 		editorText: editor,
 		onStateChange: pushStateAndCacheChrome,
 		onRenderRequest: requestRender,

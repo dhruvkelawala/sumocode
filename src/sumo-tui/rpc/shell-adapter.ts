@@ -539,13 +539,16 @@ export class RpcShellAdapter {
 		return width > 0 ? [truncateToWidth(line, width)] : [line];
 	}
 
-	/** Render Pi's two native queues separately, followed by the narrow local compaction queue. */
+	/**
+	 * Render Pi's two native queues separately, followed by the host's own queue: prompts
+	 * held during compaction or while Jev judges an `auto` delivery, not yet sent to Pi.
+	 */
 	public renderQueuedMessages(width: number): string[] {
 		if (width < 8) return [];
 		const groups = [
 			["STEERING", this.state.steeringMessages ?? []],
 			["FOLLOW-UP", this.state.followUpMessages ?? []],
-			["COMPACTION", this.state.localQueuedMessages ?? []],
+			["QUEUED", this.state.localQueuedMessages ?? []],
 		] as const;
 		const colors = activeThemeColors();
 		const accent = getActiveTheme().tokens.colors.accent;

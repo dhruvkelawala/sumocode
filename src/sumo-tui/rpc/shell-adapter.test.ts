@@ -312,6 +312,24 @@ describe("RpcShellAdapter queued messages banner", () => {
 		}
 	});
 
+	it("labels prompts the host has not sent to Pi yet as QUEUED, not compaction", async () => {
+		const adapter = await RpcShellAdapter.create({
+			terminal: { writeFramePatches: () => undefined },
+			viewport: { columns: 100, rows: 30 },
+			initialState: state({ isStreaming: true, hasMessages: true, localQueuedMessages: ["after that, open a PR"] }),
+			initialTranscript: { messages: [{ id: "m1", role: "user", displayName: "YOU", blocks: [{ type: "markdown", text: "hello" }] }] },
+		});
+		try {
+			adapter.render();
+			const text = Array.from({ length: 30 }, (_value, row) => adapter.getLastFrame()!.toPlainRow(row)).join("\n");
+			expect(text).toContain("QUEUED (1)");
+			expect(text).toContain("after that, open a PR");
+			expect(text).not.toContain("COMPACTION");
+		} finally {
+			adapter.dispose();
+		}
+	});
+
 	it("displays clipboard-image paths as a compact [image] tag", async () => {
 		const adapter = await RpcShellAdapter.create({
 			terminal: { writeFramePatches: () => undefined },

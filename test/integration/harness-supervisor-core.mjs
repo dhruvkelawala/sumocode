@@ -482,8 +482,8 @@ export function spawnSupervisedProcess(command, args, options = {}) {
 	};
 }
 
-export function spawnSupervisedPty(command, args, options, evidence, auth, sandboxApp = true) {
-	const app = sandboxApp && process.env.SUMOCODE_TEST_SANDBOX ? wrapTestApp(command, args, options) : { command, args, env: options.env };
+export function spawnSupervisedPty(command, args, options, evidence, auth, sandboxApp = true, ports = []) {
+	const app = sandboxApp && process.env.SUMOCODE_TEST_SANDBOX ? wrapTestApp(command, args, { ...options, ports }) : { command, args, env: options.env };
 	const env = { ...app.env, [HARNESS_SIGNATURE_ENV_KEY]: HARNESS_SIGNATURE };
 	delete env[HARNESS_SIGNING_KEY_ENV_KEY];
 	delete env[HARNESS_RUN_ID_ENV_KEY];

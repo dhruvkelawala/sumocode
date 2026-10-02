@@ -37,6 +37,8 @@ export interface SpawnPiPtyOptions {
 	readonly env?: NodeJS.ProcessEnv;
 	readonly args?: string[];
 	readonly spawn?: typeof spawn;
+	/** Exact HTTP fixture ports granted to a sandboxed app, never the trusted runner. */
+	readonly fixturePorts?: readonly number[];
 }
 
 export interface SpawnedPiPty {
@@ -338,7 +340,7 @@ export function spawnPiPty(options: SpawnPiPtyOptions = {}): SpawnedPiPty {
 			env: childEnv,
 		};
 		if (auth !== undefined) {
-			({ child, supervision } = spawnSupervisedPty(command, args, forkOptions, evidence, auth));
+			({ child, supervision } = spawnSupervisedPty(command, args, forkOptions, evidence, auth, true, options.fixturePorts));
 		} else {
 			child = spawnPty(command, args, forkOptions);
 		}

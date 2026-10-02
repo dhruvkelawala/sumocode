@@ -40,8 +40,15 @@ it.each([false, true])("preserves the PTY sandbox bypass (wrap=%j)", (sandboxApp
 	const options = { env: { SYNTHETIC: "kept" }, cwd: process.cwd() };
 	expect(() => spawnSupervisedPty("pi", ["a b"], options, { evidenceDir: "owned-evidence" }, { runId: "test", signingKey: "test" }, sandboxApp)).toThrow("spawn boundary");
 	expect(seam.admit).toHaveBeenCalledWith(sandboxApp ? "sandbox" : "pi", sandboxApp ? ["pi", "a b"] : ["a b"], "owned-evidence");
-	if (sandboxApp) expect(seam.wrap).toHaveBeenCalledWith("pi", ["a b"], options);
+	if (sandboxApp) expect(seam.wrap).toHaveBeenCalledWith("pi", ["a b"], { ...options, ports: [] });
 	else expect(seam.wrap).not.toHaveBeenCalled();
+});
+
+it("grants only the explicit HTTP fixture ports to a sandboxed PTY", () => {
+	vi.stubEnv("SUMOCODE_TEST_SANDBOX", "srt");
+	const options = { env: { SYNTHETIC: "kept" }, cwd: process.cwd() };
+	expect(() => spawnSupervisedPty("pi", [], options, { evidenceDir: "owned-evidence" }, { runId: "test", signingKey: "test" }, true, [43210])).toThrow("spawn boundary");
+	expect(seam.wrap).toHaveBeenCalledWith("pi", [], { ...options, ports: [43210] });
 });
 
 it.each(["", "srt"])("keeps admission socket placement in the ESM implementation (mode=%j)", async (mode) => {

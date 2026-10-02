@@ -22,6 +22,7 @@ const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 /** Files Plan 103 audited. New timing-sensitive suites should be added here. */
 const CANDIDATE_FILES = [
 	"src/sumo-tui/rpc/host-actions.test.ts",
+	"src/subagents/steering-ack-effect.test.ts",
 	"test/integration/rpc-session-switch.test.ts",
 	"test/integration/rpc-queued-message-undo.test.ts",
 	"test/integration/rpc-activity-cards.test.ts",

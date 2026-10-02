@@ -14,6 +14,7 @@ import {
 	recordPtyExit,
 	requireHarnessAuth,
 	spawnSupervisedPty,
+	spawnSupervisedApp,
 	waitForDiagnosticReadiness,
 	type ReadinessState,
 } from "./harness-supervisor.js";
@@ -747,6 +748,56 @@ nativeDescribe("native executable contract", () => {
 		expect((await waitForExit(session)).exitCode).toBe(0);
 		expect(session.getOutput()).toContain(CLEANUP_SEQUENCE);
 	}, 45_000);
+
+	it.each(["classic", "rpc"] as const)("keeps Effect cold through compiled Pi's %s extension readiness", async (profile) => {
+		const root = tempRoot("sumocode-native-steering-cold-");
+		const evidence = join(root, "cold.json");
+		const positive = join(root, "loaded.json");
+		const probe = join(root, "probe.ts");
+		// Observe library evaluation before loading SumoCode; the positive control
+		// uses the actual self-contained sidecar through compiled Pi's Jiti loader.
+		writeFileSync(probe, `import { writeFileSync } from "node:fs";
+const symbols = [];
+const original = Symbol.for;
+Symbol.for = (key) => { if (key.startsWith("effect/") || key.startsWith("~effect/")) symbols.push(key); return original(key); };
+export default function install(pi) {
+	pi.on("session_start", async () => {
+		writeFileSync(${JSON.stringify(evidence)}, JSON.stringify(symbols), { mode: 0o600 });
+		await import(${JSON.stringify(join(ARCHIVE, "extension/steering-ack.effect.mjs"))});
+		writeFileSync(${JSON.stringify(positive)}, JSON.stringify(symbols), { mode: 0o600 });
+	});
+}
+`, { mode: 0o600 });
+		const env = nativeSpawnEnv({ HOME: root, PI_CODING_AGENT_DIR: root, XDG_CONFIG_HOME: root, SUMOCODE_NATIVE_DIR: ARCHIVE });
+		if (profile === "rpc") env.SUMOCODE_RPC_CHILD = "1";
+		const launched = spawnSupervisedApp(NATIVE_PI, ["--mode", "rpc", "--offline", "--no-extensions", "--no-session", "--approve",
+			"-e", probe, "-e", profile === "rpc" ? NATIVE_RPC_EXTENSION : NATIVE_EXTENSION], { cwd: root, env, stdio: ["pipe", "pipe", "pipe"] });
+		let stdout = "";
+		launched.child.stdout!.on("data", (chunk) => { stdout += String(chunk); });
+		try {
+			const exit = new Promise((resolveExit, rejectExit) => {
+				launched.child.once("error", rejectExit);
+				launched.child.once("close", resolveExit);
+			});
+			launched.child.stdin!.end('{"type":"get_commands"}\n');
+			expect(await exit).toBe(0);
+			expect(stdout).toContain('"name":"reload"');
+			expect(JSON.parse(readFileSync(evidence, "utf8"))).toEqual([]);
+			expect(JSON.parse(readFileSync(positive, "utf8")).length).toBeGreaterThan(0);
+		} finally {
+			// EOF can exit Pi before its short-lived git probes finish. Do not signal
+			// descendants after losing the original live leader's ownership proof.
+			if (launched.child.exitCode !== null) {
+				// WAIT-CLASS: poll-interval — prove natural group drain before the supervisor records teardown
+				await vi.waitFor(() => {
+					const snapshot = processRows();
+					expect(snapshot.issue).toBeUndefined();
+					expect(snapshot.rows.filter((row) => row.pgid === launched.pgid)).toEqual([]);
+				}, { timeout: 2000 });
+			}
+			await launched.terminate();
+		}
+	}, 30_000);
 
 	it("loads the inlined SumoCode extension through compiled Pi's virtual modules", () => {
 		const result = runNative(["--mode", "rpc", "--offline", "--no-extensions", "--no-session"], {

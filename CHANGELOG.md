@@ -10,6 +10,9 @@ landed between the original scaffold and this release.
 
 ## [Unreleased]
 
+### Fixed
+- Drained visible-child steering acknowledgement waits on settlement, authority loss, and owner shutdown without closing a retained pane. Acknowledgement still confirms control consumption, not model acceptance; unconfirmed controls remain on disk without automatic retry. #590
+
 ### Removed
 - Memory/Remnic support: extraction, sidebar memory, Memory Scriptorium, `/sumo:memory`, palette entries, and the `learning` / `INSCRIBING` indicator. Persona and `APPEND_SYSTEM.md` support are unchanged; existing private memory data is untouched.
 

@@ -9,6 +9,7 @@ import { build } from "esbuild";
 import { readNativeArtifactIdentity } from "./lib/native-artifact.mjs";
 import { assertNoProductionDependencyLeakage, bundleJavaScriptText } from "./lib/production-boundaries.mjs";
 import { measureHostImport } from "./perf-startup.mjs";
+import { ptyTreeAlive, signalPtyTree, waitForTreeExit } from "./perf-startup-compare.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const DEFAULT_BASELINE = join(ROOT, "docs/perf/adoption-baseline.json");
@@ -154,41 +155,20 @@ function evaluationEnvironment(agentDir, diagFile, root, native) {
 	return env;
 }
 
-function signalChildTree(child, signal) {
-	try {
-		if (process.platform !== "win32" && Number.isInteger(child.pid)) process.kill(-child.pid, signal);
-		else child.kill(signal);
-	} catch (error) {
-		if (error?.code !== "ESRCH") throw error;
+async function stopChild(child, treeAlive) {
+	if (child.pid === undefined) return true; // spawn failed before creating a process
+	if (!Number.isSafeInteger(child.pid) || child.pid <= 1 || child.pid === process.pid) return false;
+	for (const signal of ["SIGTERM", "SIGKILL"]) {
+		if (!treeAlive()) return true;
+		try { signalPtyTree(child, signal); }
+		catch (error) { if (error?.code !== "ESRCH") throw error; }
+		await waitForTreeExit(treeAlive, 500);
 	}
+	return !treeAlive();
 }
 
-async function waitForChildExit(child, timeoutMs) {
-	if (child.exitCode !== null || child.signalCode !== null) return true;
-	return new Promise((resolveExit) => {
-		let settled = false;
-		const finish = (exited) => {
-			if (settled) return;
-			settled = true;
-			clearTimeout(timer);
-			child.removeListener("exit", onExit);
-			resolveExit(exited);
-		};
-		const onExit = () => finish(true);
-		const timer = setTimeout(() => finish(child.exitCode !== null || child.signalCode !== null), timeoutMs);
-		child.once("exit", onExit);
-	});
-}
-
-async function stopChild(child) {
-	if (child.exitCode !== null || child.signalCode !== null) return true;
-	signalChildTree(child, "SIGTERM");
-	if (await waitForChildExit(child, 500)) return true;
-	signalChildTree(child, "SIGKILL");
-	return waitForChildExit(child, 500);
-}
-
-async function evaluationSample({ command, bundlePath, root, native, workDir, index }) {
+export async function evaluationSample({ command, bundlePath, root, native, workDir, index }, boundaries = {}) {
+	if (process.platform === "win32") throw new Error("evaluation requires owned POSIX process groups");
 	const agentDir = join(workDir, `agent-${native ? "native" : "source"}-${index}`);
 	await rm(agentDir, { recursive: true, force: true });
 	await Promise.all(["home", "state", "config", "tmp", "project"].map((name) => privateDirectory(join(agentDir, name))));
@@ -198,8 +178,10 @@ async function evaluationSample({ command, bundlePath, root, native, workDir, in
 		cwd: join(agentDir, "project"),
 		env: evaluationEnvironment(agentDir, diagFile, root, native),
 		stdio: ["pipe", "pipe", "ignore"],
-		detached: process.platform !== "win32",
+		// A detached POSIX spawn owns PGID=child.pid, never the collector's group.
+		detached: true,
 	});
+	const treeAlive = () => (boundaries.treeAlive ?? ptyTreeAlive)(child, child.exitCode !== null || child.signalCode !== null);
 	let stdout = "";
 	let settled = false;
 	const result = await new Promise((resolveSample) => {
@@ -209,8 +191,8 @@ async function evaluationSample({ command, bundlePath, root, native, workDir, in
 			settled = true;
 			clearTimeout(timer);
 			clearInterval(poll);
-			const reaped = await stopChild(child).catch(() => false);
-			resolveSample(reaped ? sample : { ok: false, failure: "shutdown-failed" });
+			const reaped = await stopChild(child, treeAlive).catch(() => false);
+			resolveSample(reaped ? sample : { ok: false, failure: "shutdown-failed", processGroupId: child.pid });
 		};
 		const inspect = async () => {
 			const events = (await readFile(diagFile, "utf8").catch(() => "")).split("\n").filter(Boolean).flatMap((line) => {
@@ -239,19 +221,23 @@ async function evaluationSample({ command, bundlePath, root, native, workDir, in
 	return result;
 }
 
-async function evaluateBundle(command, bundlePath, root, native, workDir) {
+export async function evaluateBundle(command, bundlePath, root, native, workDir, boundaries = {}) {
 	const samples = [];
 	for (let index = 0; index < SAMPLES; index += 1) {
-		const sample = await evaluationSample({ command, bundlePath, root, native, workDir, index });
+		const sample = await evaluationSample({ command, bundlePath, root, native, workDir, index }, boundaries);
 		samples.push(sample);
 		console.error(`[adoption budget] ${native ? "native" : "source"} ${bundlePath.endsWith("rpc.mjs") ? "rpc" : "classic"} ${index + 1}/${SAMPLES} ${sample.ok ? "ok" : sample.failure}`);
+		if (sample.failure === "shutdown-failed") {
+			await writeFile(join(workDir, "shutdown-failure.json"), `${JSON.stringify({ bundlePath, index, ...sample }, null, 2)}\n`, { mode: 0o600 });
+			throw new Error(`evaluation process group survived shutdown; evidence retained: ${workDir}`);
+		}
 	}
 	return timingMeasurement(samples);
 }
 
-async function defaultCollectMeasurements(nativeArtifact) {
-	await mkdir(join(ROOT, ".local"), { recursive: true });
-	const workDir = await mkdtemp(join(ROOT, ".local/perf-adoption-"));
+async function defaultCollectMeasurements(nativeArtifact, outDir) {
+	const workDir = await mkdtemp(join(outDir, "evaluation-"));
+	let completed = false;
 	try {
 		const sourceClassic = await buildSourceBundle("src/extension.ts");
 		const sourceRpc = await buildSourceBundle("src/rpc-child-extension.ts");
@@ -276,8 +262,12 @@ async function defaultCollectMeasurements(nativeArtifact) {
 			measurements[`${name}-extension-bytes`] = sizeMeasurement(Buffer.byteLength(bundle.source));
 			measurements[`${name}-extension-eval-ms`] = await evaluateBundle(bundle.command, path, bundle.root, bundle.native, workDir);
 		}
+		completed = true;
 		return measurements;
-	} finally { await rm(workDir, { recursive: true, force: true }); }
+	} finally {
+		if (completed) await rm(workDir, { recursive: true, force: true });
+		else console.error(`[adoption budget] incomplete collection; evidence retained: ${workDir}`);
+	}
 }
 
 async function prepareOut(path) {
@@ -322,7 +312,7 @@ export async function runAdoptionBudget(options, dependencies = {}) {
 			if (machine[key] !== policy.baseline.machine?.[key]) throw new Error(`adoption budget machine mismatch: ${key}`);
 		}
 	}
-	const measurements = await (dependencies.collectMeasurements ?? defaultCollectMeasurements)(nativeArtifact);
+	const measurements = await (dependencies.collectMeasurements ?? defaultCollectMeasurements)(nativeArtifact, options.outDir);
 	const report = {
 		schemaVersion: 1,
 		generatedAt: new Date().toISOString(),

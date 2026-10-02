@@ -296,17 +296,18 @@ export function defaultSampleEnvironment(checkout, agentDir, diagFile, inherited
 	};
 }
 
-function signalPtyTree(child, signal) {
+export function signalPtyTree(child, signal) {
 	if (process.platform !== "win32" && Number.isInteger(child.pid)) process.kill(-child.pid, signal);
 	else child.kill(signal);
 }
 
-function ptyTreeAlive(child, leaderExited) {
+export function ptyTreeAlive(child, leaderExited) {
 	if (process.platform === "win32" || !Number.isInteger(child.pid)) return !leaderExited;
-	try { process.kill(-child.pid, 0); return true; } catch { return false; }
+	try { process.kill(-child.pid, 0); return true; }
+	catch (error) { return error?.code !== "ESRCH"; }
 }
 
-async function waitForTreeExit(isAlive, timeoutMs) {
+export async function waitForTreeExit(isAlive, timeoutMs) {
 	const deadline = Date.now() + timeoutMs;
 	while (isAlive() && Date.now() < deadline) await new Promise((resolveWait) => setTimeout(resolveWait, 20));
 }

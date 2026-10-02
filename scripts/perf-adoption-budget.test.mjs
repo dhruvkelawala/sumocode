@@ -1,12 +1,15 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
 	evaluateAdoptionBudget,
+	evaluateBundle,
+	evaluationSample,
 	instrumentExtensionBundle,
 	runAdoptionBudget,
 } from "./perf-adoption-budget.mjs";
+import { ptyTreeAlive, waitForTreeExit } from "./perf-startup-compare.mjs";
 
 const roots = [];
 afterEach(async () => {
@@ -52,7 +55,79 @@ function policy() {
 	};
 }
 
+async function withTermIgnoringDescendant(run) {
+	const workDir = await mkdtemp(join(tmpdir(), "sumocode-adoption-descendant-"));
+	roots.push(workDir);
+	const command = join(workDir, "pi-fixture.cjs");
+	const launches = join(workDir, "launches.jsonl");
+	await writeFile(command, `#!${process.execPath}
+const { fork } = require("node:child_process");
+const fs = require("node:fs");
+if (process.argv[2] === "descendant") {
+	process.on("SIGTERM", () => fs.writeFileSync(${JSON.stringify(join(workDir, "descendant-term"))}, "ignored"));
+	setInterval(() => {}, 1000);
+	process.send("ready");
+} else {
+	process.on("SIGTERM", () => process.exit(0));
+	const child = fork(__filename, ["descendant"], { stdio: ["ignore", "ignore", "ignore", "ipc"] });
+	child.once("message", () => {
+		fs.appendFileSync(${JSON.stringify(launches)}, JSON.stringify({ pid: process.pid, descendant: child.pid }) + "\\n");
+		fs.writeFileSync(process.env.SUMO_TUI_DIAG_FILE, [
+			{ event: "sumocode_extension_eval_start", ts: 100 },
+			{ event: "sumocode_extension_eval_end", ts: 110 },
+		].map(JSON.stringify).join("\\n") + "\\n");
+		console.log(JSON.stringify({ type: "response", id: "budget-probe", command: "get_state", success: true }));
+	});
+	process.stdin.resume();
+}
+`);
+	await chmod(command, 0o700);
+	try { await run({ command, workDir, launches }); }
+	finally {
+		const children = (await readFile(launches, "utf8").catch(() => "")).trim().split("\n").filter(Boolean).map(JSON.parse);
+		for (const child of children) {
+			try { process.kill(-child.pid, "SIGKILL"); }
+			catch (error) { expect(error?.code).toBe("ESRCH"); }
+			await waitForTreeExit(() => ptyTreeAlive(child, true), 1_000);
+			expect(ptyTreeAlive(child, true)).toBe(false);
+		}
+	}
+}
+
 describe("adoption performance budget", () => {
+	it.skipIf(process.platform === "win32")("reaps a TERM-ignoring descendant even after its leader exits on TERM", async () => {
+		await withTermIgnoringDescendant(async ({ command, workDir, launches }) => {
+			const sample = await evaluationSample({ command, bundlePath: "fixture.mjs", root: workDir, native: true, workDir, index: 0 });
+			expect(sample).toEqual({ ok: true, durationMs: 10 });
+			expect(await readFile(join(workDir, "descendant-term"), "utf8")).toBe("ignored");
+			const child = JSON.parse((await readFile(launches, "utf8")).trim());
+			expect(ptyTreeAlive(child, true)).toBe(false);
+			expect(() => process.kill(child.descendant, 0)).toThrow(expect.objectContaining({ code: "ESRCH" }));
+		});
+	});
+
+	it.skipIf(process.platform === "win32")("aborts evaluation collection and retains evidence when group emptiness is unproven", async () => {
+		await withTermIgnoringDescendant(async ({ command, workDir, launches }) => {
+			await expect(evaluateBundle(command, "fixture.mjs", workDir, true, workDir, { treeAlive: () => true }))
+				.rejects.toThrow(`evidence retained: ${workDir}`);
+			const children = (await readFile(launches, "utf8")).trim().split("\n").map(JSON.parse);
+			expect(children).toHaveLength(1);
+			expect(JSON.parse(await readFile(join(workDir, "shutdown-failure.json"), "utf8")))
+				.toMatchObject({ ok: false, failure: "shutdown-failed", index: 0, processGroupId: children[0].pid });
+			expect(await readFile(join(workDir, "agent-native-0/startup.jsonl"), "utf8")).toContain("sumocode_extension_eval_end");
+		});
+	});
+
+	it("treats only ESRCH as proof that a process group is empty", () => {
+		const kill = vi.spyOn(process, "kill");
+		try {
+			for (const code of ["EPERM", "EIO", "ESRCH"]) {
+				kill.mockImplementation(() => { throw Object.assign(new Error(code), { code }); });
+				expect(ptyTreeAlive({ pid: 12345 }, true)).toBe(code !== "ESRCH");
+			}
+		} finally { kill.mockRestore(); }
+	});
+
 	it("requires explicit review and complete new evidence before accepting the integration baseline", async () => {
 		const committed = JSON.parse(await readFile(new URL("../docs/perf/adoption-baseline.json", import.meta.url), "utf8"));
 		expect(committed).toMatchObject({

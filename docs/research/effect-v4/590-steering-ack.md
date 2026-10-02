@@ -1,6 +1,6 @@
 # #590: visible steering consumption waits
 
-Base: `97897ae9`. Code/test head: `80ac1d7b` on `sumo/v08-590-effect-steering`.
+Base: `97897ae9`. Code/test head: `47968042` on `sumo/v08-590-effect-steering`.
 This note is not a release approval or a replacement for #589's measurements.
 
 ## Boundary and outcome
@@ -22,7 +22,8 @@ producer's truncate-before-write window. The original 250ms first-poll/cadence
 and 30s wait budget are retained; the wait clock starts when the lazy runtime
 starts, not during module loading.
 
-A retained supervisor's steering AbortController stops only its waits. Disposal
+A retained supervisor's steering AbortController stops only its waits, honoring
+already consumed controls before rejecting those still on disk. Disposal
 continues to be synchronous at the existing public boundary; each send Promise
 awaits its own teardown. Idle turns and session detach do not close or signal a
 retained child. The ordinary response watcher is intentionally unchanged.
@@ -65,14 +66,15 @@ not relaxed. Generated artifacts remain ignored.
 
 ## Local evidence
 
-Checks used Node 24, pnpm 10.29.2 and pinned Bun 1.4.0. Production code was fixed
-at `414d2f86`; later commits add tests/fixtures only.
+Checks used Node 24, pnpm 10.29.2 and pinned Bun 1.4.0. The final production
+change at `47968042` adds the consumed-before-owner-shutdown regression/fix;
+all local checks below were repeated against that code head.
 
 - Frozen install, typecheck, build, lint, dependency-audit policy and
   host/extension/native builds passed. Lint retains four existing scratch-file
   warnings. Full-pass compiler budget: 1,539,266 instantiations versus 1,353,836
   baseline (1.14x, below the unchanged 2,707,672 limit).
-- Full unit suite: **257 files, 4,397 passed, 2 skipped**, using
+- Full unit suite: **257 files, 4,398 passed, 2 skipped**, using
   `pnpm test --fileParallelism=false`. Unbounded concurrency timed out five
   existing expensive tests; four workers left one timeout. The unchanged
   JSON-escaped-result test passed alone in 13.37s; serial execution passed all
@@ -93,7 +95,8 @@ at `414d2f86`; later commits add tests/fixtures only.
   startup; the failed strip run is reported, not counted as a sandbox pass.
 
 The srt failure's evidence is retained under
-`.srt-spike/tmp/sumocode-harness-v2-run-rkXPJn/`. An earlier recovery fixture
+`.srt-spike/tmp/sumocode-harness-v2-run-fs5erw/` (initial reproduction: `rkXPJn`).
+An earlier recovery fixture
 first-import timeout also retained evidence under
 `/private/tmp/sumocode-harness-v2-run-vWgAX5`; injecting the real runner fixed its
 fake-clock setup without changing the production edge or recovery assertions.
@@ -119,7 +122,7 @@ this branch's delivery.
 ## #589 remeasurement and next seams
 
 Current native extension bytes (UTF-8, not JavaScript string lengths): classic
-987,013; RPC 866,210; shared lazy artifact 116,213. These are identified candidate
+987,045; RPC 866,242; shared lazy artifact 116,213. These are identified candidate
 sizes, **not** a budget verdict. Cold-symbol probes and eager-closure guards do
 not substitute for evaluation timing or readiness samples.
 
@@ -139,8 +142,8 @@ Neither seam is implemented here.
 
 ## Review-ready gate
 
-- Contract: `/Users/sumodeus/.pi/agent/skills/review-ready/contract.md` (bundled
-  default; no repository code-quality override).
+- Contract: the `review-ready` skill's bundled `contract.md` (no repository
+  code-quality override).
 - Changed seam: published visible control → consumed/unconfirmed Promise.
 - Trace: `send` fences and renames → captures a terminal outcome → lazy runner
   races scoped polls with the terminal signal → losing branch drains → runtime

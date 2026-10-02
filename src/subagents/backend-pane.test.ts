@@ -2,9 +2,25 @@ import { describe, expect, it, vi } from "vitest";
 import { buildVisibleTaskPaths } from "../background-tasks/visible-spawn.js";
 import type { TerminalHost } from "../terminal-host/types.js";
 import { type PrivateArtifactStat } from "../private-artifact.js";
-import { createPaneChildSpawner, type VisibleLaunchEvidence, type VisibleLaunchGate } from "./backend-pane.js";
+import { createPaneChildSpawner, type PaneBackendDependencies, type VisibleLaunchEvidence, type VisibleLaunchGate } from "./backend-pane.js";
 import type { ProcessTreeOperations } from "../background-tasks/process-tree.js";
 import type { SubagentEvent } from "./domain.js";
+import * as Clock from "effect/Clock";
+import * as Effect from "effect/Effect";
+import { waitForSteeringAck, type SteeringAckWait } from "./steering-ack-effect.js";
+
+// Existing fake-timer oracle keeps its clock; new race tests use TestClock.
+const waitWithFakeClock = (options: SteeringAckWait): Promise<void> => {
+	const live = Effect.runSync(Clock.Clock);
+	return waitForSteeringAck(options, {
+		...live,
+		currentTimeMillisUnsafe: () => Date.now(),
+		currentTimeNanosUnsafe: () => BigInt(Date.now()) * 1_000_000n,
+		monotonicTimeNanosUnsafe: () => BigInt(Date.now()) * 1_000_000n,
+		monotonicTimeNanos: Effect.sync(() => BigInt(Date.now()) * 1_000_000n),
+		sleep: (duration) => live.sleep(duration),
+	});
+};
 
 class FakeFs {
 	readonly files = new Map<string, string>();
@@ -120,7 +136,7 @@ const createHarness = (
 	startResult: typeof startedPane | { ok: false; error: string; code?: string; reason?: string; orphanPaneId?: string; orphanTabId?: string; tabGone?: boolean } = startedPane,
 	placement: { kind: "tab"; tabId: string; direction: "right" } | { kind: "workspace"; workspaceId: string; paneId: string } = { kind: "tab", tabId: "w1:t1", direction: "right" },
 	appendSystemPrompt?: string,
-	spawnerDependencies?: { sendAckPollMs?: number; sendAckTimeoutMs?: number; resolveLauncher?: () => string; env?: NodeJS.ProcessEnv },
+	spawnerDependencies?: Pick<PaneBackendDependencies, "sendAckPollMs" | "sendAckTimeoutMs" | "resolveLauncher" | "env" | "waitForSteeringAck">,
 	onEvent?: (event: SubagentEvent) => void,
 ) => {
 	const fs = new FakeFs();
@@ -133,7 +149,7 @@ const createHarness = (
 		closePane,
 		notify: vi.fn(async () => undefined),
 	};
-	const spawn = createPaneChildSpawner({ fs, now: () => 1234, baseDir: "/tmp/subagents", pollIntervalMs: 750, env: {}, ...spawnerDependencies });
+	const spawn = createPaneChildSpawner({ fs, now: () => 1234, baseDir: "/tmp/subagents", pollIntervalMs: 750, env: {}, waitForSteeringAck: waitWithFakeClock, ...spawnerDependencies });
 	const child = spawn({
 		prompt: "do the work",
 		name: "worker",
@@ -187,7 +203,7 @@ const createGateHarness = () => {
 		startAgentPane: vi.fn(async () => startedPane),
 		closePane: vi.fn(), openCommandInSplit: vi.fn(), notify: vi.fn(),
 	};
-	const spawn = createPaneChildSpawner({ fs, now: () => 1234, baseDir: "/tmp/subagents", resolveLauncher: () => "/parent tools/sumocode", env: {}, processTree: operations });
+	const spawn = createPaneChildSpawner({ fs, now: () => 1234, baseDir: "/tmp/subagents", resolveLauncher: () => "/parent tools/sumocode", env: {}, processTree: operations, waitForSteeringAck: waitWithFakeClock });
 	const options = {
 		id: "sa-gate", name: "worker", prompt: "private task prompt", cwd: "/repo", host,
 		pi: { exec: vi.fn() }, placement: { kind: "tab" as const, tabId: "t", direction: "right" as const }, launchGate: gate,
@@ -1247,6 +1263,27 @@ describe("pane subagent backend", () => {
 });
 
 describe("pane subagent steering and close", () => {
+	it.each([true, false])("snapshots consumption at settlement while the lazy runner is loading: consumed=%s", async (consumed) => {
+		vi.useFakeTimers();
+		try {
+			let release!: () => void;
+			const loading = new Promise<void>((resolve) => { release = resolve; });
+			const harness = createHarness(startedPane, undefined, undefined, {
+				waitForSteeringAck: async (options) => { await loading; await waitWithFakeClock(options); },
+			});
+			await flushPromises();
+			const send = harness.child.send!("during lazy load");
+			const result = send.then(() => "consumed", (error: Error) => error.message);
+			const path = `${harness.paths.controlDir}/steer-1.txt`;
+			if (consumed) harness.fs.files.delete(path);
+			harness.child.interrupt();
+			// Consumption after terminal settlement must not rewrite its verdict.
+			harness.fs.files.delete(path);
+			release();
+			expect(await result).toMatch(consumed ? /^consumed$/ : /has settled/);
+			expect(vi.getTimerCount()).toBe(0);
+		} finally { vi.useRealTimers(); }
+	});
 	it("publishes steer files tmp-then-rename and resolves when the child consumes them", async () => {
 		vi.useFakeTimers();
 		try {

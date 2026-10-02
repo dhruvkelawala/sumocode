@@ -7,7 +7,7 @@ import {
 	hostOutputsHash,
 	HOST_INPUT_MANIFEST_OUTPUT,
 } from "./lib/host-bundle.mjs";
-import { assertNoProductionDependencyLeakage, bundleJavaScriptText } from "./lib/production-boundaries.mjs";
+import { assertNoEffectInEagerClosure, assertNoProductionDependencyLeakage, bundleJavaScriptText } from "./lib/production-boundaries.mjs";
 
 const root = resolve(import.meta.dirname, "..");
 const outDir = resolve(root, "dist/host");
@@ -53,6 +53,7 @@ const beforeBuild = await createHostInputManifest(root, Object.keys(probe.metafi
 await atomicWrite(manifestPath, `${JSON.stringify({ version: 0, inputs: [], hash: "build-in-progress" }, null, 2)}\n`);
 
 const result = await build(buildOptions);
+assertNoEffectInEagerClosure(result.metafile, "src/sumo-tui/rpc/host.ts", "host bundle");
 assertNoProductionDependencyLeakage(
 	result.metafile,
 	"host bundle",

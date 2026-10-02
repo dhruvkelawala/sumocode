@@ -220,6 +220,7 @@ type Settlement = "settled" | "lost" | "ambiguous";
  */
 class RetainedSupervisor {
 	private stopControl?: () => void;
+	private readonly steeringController = new AbortController();
 	private readonly hasExternalController: boolean;
 	private readonly authority: ReturnType<typeof prepareLaunch>;
 	private readonly registry: SubagentRegistry;
@@ -241,7 +242,7 @@ class RetainedSupervisor {
 	public readonly ready = new Promise<void>((resolve, reject) => { this.acceptReady = resolve; this.refuseReady = reject; });
 
 	public constructor(options: Omit<RetainedHeadlessOptions, "launch"> & { readonly cwd: string },
-		start: (authority: ReturnType<typeof prepareLaunch>, refuse: (failure?: SubagentLaunchFailure) => void, checkActive: () => void, beginVisibleCleanup: () => void) => SpawnedChild,
+		start: (authority: ReturnType<typeof prepareLaunch>, refuse: (failure?: SubagentLaunchFailure) => void, checkActive: () => void, beginVisibleCleanup: () => void, steeringSignal: AbortSignal) => SpawnedChild,
 		private readonly dependencies: Omit<RetainedHeadlessDependencies, "spawn"> = {}) {
 		if (options.attach && (options.attach.cwd !== options.cwd
 			|| realpathSync(options.attach.cwd) !== options.attach.cwd || !statSync(options.attach.cwd).isDirectory()
@@ -261,7 +262,7 @@ class RetainedSupervisor {
 			this.authority.visibleGate.beforeEffect();
 			// The backend stops polling before cleanup, but emits run-settled only after it.
 			this.visibleCleanupStarted = true;
-		});
+		}, this.steeringController.signal);
 		this.heartbeat = setInterval(() => {
 			try {
 				if (!this.completed) this.renew();
@@ -346,6 +347,7 @@ class RetainedSupervisor {
 
 	/** Teardown-only: stop renewal timers without touching durable evidence. */
 	public dispose(): void {
+		this.steeringController.abort();
 		clearInterval(this.heartbeat);
 		this.stopControl?.();
 		this.listeners.clear();
@@ -464,6 +466,7 @@ class RetainedSupervisor {
 		if (this.stopped) return;
 		this.stopped = true;
 		this.authority.gate.onRefused();
+		this.steeringController.abort();
 		clearInterval(this.heartbeat);
 		this.stopControl?.();
 		this.markUncertain(status, failure);
@@ -504,7 +507,7 @@ export class RetainedVisibleSupervisor extends RetainedSupervisor {
 	public constructor(options: RetainedVisibleOptions, dependencies: Omit<RetainedHeadlessDependencies, "spawn"> & { readonly spawn?: typeof spawnPaneChild } = {}) {
 		if (options.initial.backend !== "visible" || options.initial.id !== options.launch.id) throw new Error("visible record binding mismatch");
 		const operations = dependencies.operations ?? retainedProcessTree;
-		super({ ...options, cwd: options.launch.cwd }, (authority, refuse, checkActive, beginVisibleCleanup) => {
+		super({ ...options, cwd: options.launch.cwd }, (authority, refuse, checkActive, beginVisibleCleanup, steeringSignal) => {
 			let cleaned = false;
 			const cleanup = async (controlFence?: () => void): Promise<void> => {
 				if (cleaned) return;
@@ -532,7 +535,7 @@ export class RetainedVisibleSupervisor extends RetainedSupervisor {
 					throw error;
 				}
 			};
-			return (dependencies.spawn ?? spawnPaneChild)({ ...options.launch, signal: undefined, retainedTaskDir: options.initial.taskDir,
+			return (dependencies.spawn ?? spawnPaneChild)({ ...options.launch, signal: undefined, steeringSignal, retainedTaskDir: options.initial.taskDir,
 				launchGate: {
 					...authority.visibleGate,
 					wrapperBorn: async (evidence: VisibleLaunchEvidence) => {

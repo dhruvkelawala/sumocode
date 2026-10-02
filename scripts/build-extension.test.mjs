@@ -123,6 +123,7 @@ describe("extension bundle freshness", () => {
 		const manifest = JSON.parse(await readFile(resolve(root, "package.json"), "utf8"));
 		expect(EXTENSION_RECIPE_INPUTS).toContain("package.json");
 		expect(EXTENSION_RECIPE_INPUTS).toContain("scripts/lib/production-boundaries.mjs");
+		expect(EXTENSION_RECIPE_INPUTS).toContain("scripts/lib/steering-ack-bundle.mjs");
 		expect(EXTENSION_RECIPE_INPUTS).not.toContain("pnpm-lock.yaml");
 		expect(manifest.devDependencies?.esbuild).toMatch(/^\d+\.\d+\.\d+$/);
 	});

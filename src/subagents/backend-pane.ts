@@ -801,7 +801,9 @@ export const createPaneChildSpawner = (dependencies: PaneBackendDependencies = {
 
 	function shutdownSteering(): void {
 		for (const path of pendingSteeringAcks.keys()) {
-			finishPendingSteeringAck(path, new Error("visible steering owner stopped; control outcome unconfirmed, files retained"));
+			finishPendingSteeringAck(path, fs.existsSync(path)
+				? new Error("visible steering owner stopped; control outcome unconfirmed, files retained")
+				: undefined);
 		}
 	}
 	options.steeringSignal?.addEventListener("abort", shutdownSteering, { once: true });

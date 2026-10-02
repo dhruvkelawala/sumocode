@@ -96,6 +96,18 @@ describe("retained visible owner", () => {
 		expect(vi.getTimerCount()).toBe(1);
 		await expect(child.send!("late")).rejects.toThrow("owner stopped");
 	});
+	it("owner shutdown honors consumption before the next acknowledgement tick", async () => {
+		const f = fixture(); await f.start();
+		const { child } = f.control();
+		const pending = child.send!("consumed before owner shutdown");
+		const path = join(f.taskDir, "control", "steer-1.txt");
+		renameSync(path, `${path}.consumed`);
+		f.owner.dispose();
+		await expect(pending).resolves.toBeUndefined();
+		expect(f.operations.signalTree).not.toHaveBeenCalled();
+		expect(f.host.closePane).not.toHaveBeenCalled();
+		expect(vi.getTimerCount()).toBe(1);
+	});
 	it("persists the nonce command, original tree and inspected pane before release", async () => {
 		const f = fixture();
 		expect(existsSync(join(f.taskDir, "launch.release"))).toBe(false);

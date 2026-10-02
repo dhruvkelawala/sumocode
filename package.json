@@ -34,6 +34,7 @@
     "node": ">=23.11.0"
   },
   "devDependencies": {
+    "@effect/vitest": "4.0.0-rc.112",
     "@earendil-works/pi-ai": "0.99.1",
     "@earendil-works/pi-coding-agent": "0.99.1",
     "@earendil-works/pi-tui": "0.99.1",
@@ -90,6 +91,7 @@
     "test:visual:real-runtime": "node scripts/visual-real-runtime.mjs"
   },
   "dependencies": {
+    "effect": "4.0.0-rc.112",
     "grok-mermaid": "0.2.2",
     "jiti": "^2.7.0",
     "shiki": "4.4.3",

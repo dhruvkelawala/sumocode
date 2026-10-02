@@ -22,6 +22,7 @@ const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 /** Files Plan 103 audited. New timing-sensitive suites should be added here. */
 const CANDIDATE_FILES = [
 	"src/sumo-tui/rpc/host-actions.test.ts",
+	"src/subagents/steering-ack-effect.test.ts",
 	"test/integration/rpc-session-switch.test.ts",
 	"test/integration/rpc-queued-message-undo.test.ts",
 	"test/integration/rpc-activity-cards.test.ts",
@@ -40,6 +41,7 @@ const VI_TIMER_METHODS = new Set([
 	"runOnlyPendingTimers",
 	"runOnlyPendingTimersAsync",
 ]);
+const TEST_CLOCK_METHODS = new Set(["adjust", "setTime"]);
 const SLEEP_HELPERS = new Set(["delay", "sleep", "pause", "wait"]);
 const MARKER = /^\s*(?:\*\s*)?WAIT-CLASS:(.*)$/;
 const MARKER_BODY = /^\s*([A-Za-z-]+)\s*(?:—|--)\s*(.*)$/;
@@ -215,6 +217,12 @@ function isWaitCall(call) {
 		&& ts.isIdentifier(ts.skipOuterExpressions(callee.expression))
 		&& ts.skipOuterExpressions(callee.expression).text === "vi"
 	) return true;
+	if (
+		name !== undefined && TEST_CLOCK_METHODS.has(name)
+		&& (ts.isPropertyAccessExpression(callee) || ts.isElementAccessExpression(callee))
+		&& ts.isIdentifier(ts.skipOuterExpressions(callee.expression))
+		&& ts.skipOuterExpressions(callee.expression).text === "TestClock"
+	) return true;
 	return ts.isIdentifier(callee)
 		&& SLEEP_HELPERS.has(callee.text)
 		&& call.arguments.length > 0
@@ -322,6 +330,11 @@ describe("test wait classification", () => {
 		const source = await readFile(join(REPO_ROOT, relativePath), "utf8");
 		const violations = findWaitClassificationViolations(source);
 		expect(violations, formatViolations(relativePath, violations)).toEqual([]);
+	});
+
+	it.each(["TestClock.adjust(250)", "TestClock.setTime(500)", 'TestClock["adjust"](250)'])("classifies the deterministic Effect clock: %s", (source) => {
+		expect(findWaitClassificationViolations(source)[0]?.problem).toBe("timer has no adjacent WAIT-CLASS marker");
+		expect(findWaitClassificationViolations(`// WAIT-CLASS: clock-contract — consumption deadline\n${source}`)).toEqual([]);
 	});
 
 	it("rejects a bare timer", () => {

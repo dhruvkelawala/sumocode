@@ -16,6 +16,7 @@ const inputManifestPath = join(root, "dist", "extension", ".inputs.json");
 const extensionOutputs = [
 	"sumocode-extension.bundle.mjs",
 	"sumocode-extension.bundle.mjs.map",
+	"steering-ack.effect.mjs",
 	"assets/sumo-face.ans",
 	"bounded-terminal-runner.mjs",
 ];

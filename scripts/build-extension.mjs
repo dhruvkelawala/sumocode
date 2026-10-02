@@ -8,7 +8,8 @@ import {
 	extensionInputManifestsMatch,
 	extensionOutputsHash,
 } from "./lib/extension-bundle.mjs";
-import { assertNoProductionDependencyLeakage, bundleJavaScriptText } from "./lib/production-boundaries.mjs";
+import { assertNoEffectInEagerClosure, assertNoProductionDependencyLeakage, bundleJavaScriptText } from "./lib/production-boundaries.mjs";
+import { buildSteeringAckBundle, steeringAckBoundary } from "./lib/steering-ack-bundle.mjs";
 
 const root = resolve(import.meta.dirname, "..");
 const outDir = resolve(root, "dist/extension");
@@ -23,6 +24,7 @@ const buildOptions = {
 	platform: "node",
 	target: "node22",
 	packages: "external",
+	plugins: [steeringAckBoundary],
 	sourcemap: true,
 	metafile: true,
 	write: false,
@@ -56,23 +58,26 @@ await mkdir(outDir, { recursive: true });
 // invalid manifest that forces the safe source fallback — never a torn or
 // rejected artifact behind a fresh manifest.
 const probe = await build(buildOptions);
-const beforeBuild = await createExtensionInputManifest(root, Object.keys(probe.metafile.inputs));
+const lazyProbe = await buildSteeringAckBundle(root, outDir);
+const beforeBuild = await createExtensionInputManifest(root, [...Object.keys(probe.metafile.inputs), ...Object.keys(lazyProbe.metafile.inputs)]);
 await atomicWrite(manifestPath, `${JSON.stringify({ version: 0, inputs: [], hash: "build-in-progress" }, null, 2)}\n`);
 
 const result = await build(buildOptions);
+const lazy = await buildSteeringAckBundle(root, outDir);
+assertNoEffectInEagerClosure(result.metafile, "src/extension.ts", "extension bundle");
 assertNoProductionDependencyLeakage(
 	result.metafile,
 	"extension bundle",
 	bundleJavaScriptText(result.outputFiles),
 );
-const inputManifest = await createExtensionInputManifest(root, Object.keys(result.metafile.inputs));
+const inputManifest = await createExtensionInputManifest(root, [...Object.keys(result.metafile.inputs), ...Object.keys(lazy.metafile.inputs)]);
 if (!extensionInputManifestsMatch(beforeBuild, inputManifest)) {
 	throw new Error("Extension bundle inputs changed during build; retry from a stable checkout");
 }
 
 // Atomically publish the validated bundle and sourcemap from memory, then the
 // copied assets, before recomputing the output hash over the published bytes.
-for (const file of result.outputFiles) {
+for (const file of [...result.outputFiles, ...lazy.outputFiles]) {
 	await atomicWrite(file.path, file.contents);
 }
 for (const asset of EXTENSION_ASSETS) {

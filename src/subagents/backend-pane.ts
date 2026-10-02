@@ -40,6 +40,8 @@ import {
 import type { SpawnedChild } from "./backend-pi.js";
 import type { McpLaunchCapability } from "./mcp-capability.js";
 import type { SubagentEvent, SubagentLaunchFailure } from "./domain.js";
+import type { SteeringAckWait } from "./steering-ack-effect.js";
+import { logDiagnostic } from "../sumo-tui/runtime/diagnostics.js";
 
 const RESPONSE_POLL_INTERVAL_MS = 750;
 const SEND_ACK_POLL_MS = 250;
@@ -50,6 +52,12 @@ const SEND_ACK_TIMEOUT_MS = 30_000;
 /** Task and control dirs hold prompt/steer text; keep them owner-only. */
 const CLOSE_REQUEST_FILE = "close.request";
 const ERROR_TEXT_MAX = 4096;
+
+interface PendingSteeringAck {
+	readonly controller: AbortController;
+	outcome?: "consumed" | Error;
+	readonly beforeEffect?: () => void;
+}
 
 interface PaneBackendFs extends PrivateArtifactFs {
 	existsSync(path: string): boolean;
@@ -94,6 +102,8 @@ export interface PaneChildOptions {
 	model?: string;
 	thinking?: string;
 	signal?: AbortSignal;
+	/** Wait-owner shutdown only; never signals or closes a retained child. */
+	readonly steeringSignal?: AbortSignal;
 	host: TerminalHost;
 	pi: PiExecLike;
 	placement: AgentPanePlacement;
@@ -120,6 +130,8 @@ export interface PaneBackendDependencies {
 	sendAckTimeoutMs?: number;
 	resolveLauncher?: () => string;
 	processTree?: ProcessTreeOperations;
+	/** Plain test seam for the lazy acknowledgement runner. */
+	waitForSteeringAck?: (options: SteeringAckWait) => Promise<void>;
 }
 
 const nodeFs: PaneBackendFs = {
@@ -294,12 +306,7 @@ export const createPaneChildSpawner = (dependencies: PaneBackendDependencies = {
 		launchTimer = undefined;
 		refuseReady(error);
 	};
-	const pendingSteeringAcks = new Map<string, {
-		readonly timer: ReturnType<typeof setInterval>;
-		readonly resolve: () => void;
-		readonly reject: (error: Error) => void;
-		readonly beforeEffect?: () => void;
-	}>();
+	const pendingSteeringAcks = new Map<string, PendingSteeringAck>();
 
 	const clearWatcher = (): void => {
 		if (!pollTimer) return;
@@ -351,23 +358,21 @@ export const createPaneChildSpawner = (dependencies: PaneBackendDependencies = {
 
 	const finishPendingSteeringAck = (path: string, error?: Error): void => {
 		const pending = pendingSteeringAcks.get(path);
-		if (!pending) return;
+		if (!pending || pending.outcome !== undefined) return;
 		if (!authorityLost) {
 			try { assertAuthority(); pending.beforeEffect?.(); }
 			catch { refuseEffect(authorityError()); return; }
 		}
-		pendingSteeringAcks.delete(path);
-		clearInterval(pending.timer);
-		if (error) pending.reject(error);
-		else pending.resolve();
+		pending.outcome = error ?? "consumed";
+		pending.controller.abort();
 	};
 
 	// While authority holds, settlement and interrupt honor consumption: an absent control
 	// file proves the child watcher consumed it and synchronously submitted to
 	// Pi, so that waiter resolves even when settlement wins the race against the
 	// next ack tick. Only controls still on disk are ambiguous and rejected with
-	// the settled error shape. finishPendingSteeringAck keeps exactly-once
-	// timer/map cleanup for both outcomes.
+	// the settled error shape. Snapshot the verdict before the lazy import can
+	// resume; later consumption cannot turn an unconfirmed settlement into success.
 	const settlePendingSteeringAcks = (): void => {
 		for (const path of pendingSteeringAcks.keys()) {
 			finishPendingSteeringAck(path, fs.existsSync(path) ? steeringSettlementError() : undefined);
@@ -382,6 +387,7 @@ export const createPaneChildSpawner = (dependencies: PaneBackendDependencies = {
 		clearWatcher();
 		settlePendingSteeringAcks();
 		options.signal?.removeEventListener("abort", onAbort);
+		options.steeringSignal?.removeEventListener("abort", shutdownSteering);
 		try { assertAuthority(); }
 		catch { return; }
 		if (gate?.cleanup) {
@@ -539,6 +545,7 @@ export const createPaneChildSpawner = (dependencies: PaneBackendDependencies = {
 	 * could duplicate steering that Pi already owns.
 	 */
 	const send = (text: string, beforeEffect?: () => void): Promise<void> => {
+		if (options.steeringSignal?.aborted) return Promise.reject(new Error("visible steering owner stopped; control outcome unconfirmed, files retained"));
 		if (authorityLost) return Promise.reject(authorityError());
 		if (settled || interrupted) return Promise.reject(steeringSettlementError());
 		if (!released) return Promise.reject(new Error("visible launch has not been released"));
@@ -555,43 +562,40 @@ export const createPaneChildSpawner = (dependencies: PaneBackendDependencies = {
 		catch { return Promise.reject(authorityError()); }
 		beforeEffect?.();
 		fs.renameSync(`${finalPath}.tmp`, finalPath);
+		const pending: PendingSteeringAck = {
+			controller: new AbortController(), beforeEffect,
+		};
+		pendingSteeringAcks.set(finalPath, pending);
 		emitEvent?.({ kind: "turn-started", at: now() });
-		try { assertAuthority(); }
-		catch { return Promise.reject(authorityError()); }
-		const ackPollMs = dependencies.sendAckPollMs ?? SEND_ACK_POLL_MS;
 		const ackTimeoutMs = dependencies.sendAckTimeoutMs ?? SEND_ACK_TIMEOUT_MS;
-		return new Promise<void>((resolve, reject) => {
-			let elapsed = 0;
-			const ackTimer = setInterval(() => {
-				try { assertAuthority(); }
-				catch { return; }
-				if (!fs.existsSync(finalPath)) {
-					finishPendingSteeringAck(finalPath);
-					return;
-				}
-				// The budget advances on EVERY tick, before any branch: poll() can hit
-				// the producer's truncate-before-write window and re-read the exit
-				// marker as empty, returning without settling. A budget that only grew
-				// on the fallback branch would then never fire and the waiter would
-				// hang past its acknowledgement timeout.
-				elapsed += ackPollMs;
-				if (fs.existsSync(paths.exitFile) && readText(paths.exitFile, "exit marker").trim()) {
-					// Reuse the normal settlement path so every concurrent waiter and the
-					// response watcher are cleaned up exactly once.
-					poll();
-				}
-				// Guard on map presence: if poll() settled, this waiter was already
-				// finished exactly once with the child-settled error.
-				if (elapsed >= ackTimeoutMs && pendingSteeringAcks.has(finalPath)) {
-					finishPendingSteeringAck(
-						finalPath,
-						new Error(`steering consumption was not acknowledged within ${ackTimeoutMs}ms for ${options.id} — the file remains and the child may still consume it`),
-					);
-				}
-			}, ackPollMs);
-			pendingSteeringAcks.set(finalPath, { timer: ackTimer, resolve, reject, beforeEffect });
-			ackTimer.unref?.();
+		const inspect = (): "pending" | "consumed" | Error => {
+			if (pending.outcome !== undefined) return pending.outcome;
+			try { assertAuthority(); }
+			catch { return authorityError(); }
+			if (!fs.existsSync(finalPath)) finishPendingSteeringAck(finalPath);
+			else if (settled || interrupted) finishPendingSteeringAck(finalPath, steeringSettlementError());
+			else if (fs.existsSync(paths.exitFile) && readText(paths.exitFile, "exit marker").trim()) poll();
+			return pending.outcome ?? "pending";
+		};
+		const waitOptions: SteeringAckWait = {
+			pollMs: dependencies.sendAckPollMs ?? SEND_ACK_POLL_MS,
+			timeoutMs: ackTimeoutMs,
+			terminalSignal: pending.controller.signal,
+			inspect,
+			timeout: () => {
+				finishPendingSteeringAck(finalPath, new Error(`steering consumption was not acknowledged within ${ackTimeoutMs}ms for ${options.id} — the file remains and the child may still consume it`));
+				return pending.outcome ?? authorityError();
+			},
+			onFailure: () => logDiagnostic("visible_steering_wait_failed"),
+		};
+		const wait = dependencies.waitForSteeringAck ?? (async (input: SteeringAckWait): Promise<void> => {
+			const { waitForSteeringAck } = await import("./steering-ack-effect.js").catch((error) => {
+				logDiagnostic("visible_steering_wait_failed", { phase: "load" });
+				throw error;
+			});
+			await waitForSteeringAck(input);
 		});
+		return wait(waitOptions).finally(() => { pendingSteeringAcks.delete(finalPath); });
 	};
 
 	/** Ask the child's task-mode watcher to persist its response and exit. */
@@ -795,6 +799,14 @@ export const createPaneChildSpawner = (dependencies: PaneBackendDependencies = {
 		})().finally(() => { if (!gate) markReady(); });
 	};
 
+	function shutdownSteering(): void {
+		for (const path of pendingSteeringAcks.keys()) {
+			finishPendingSteeringAck(path, fs.existsSync(path)
+				? new Error("visible steering owner stopped; control outcome unconfirmed, files retained")
+				: undefined);
+		}
+	}
+	options.steeringSignal?.addEventListener("abort", shutdownSteering, { once: true });
 	function onAbort(): void { interrupt(); }
 	if (options.signal?.aborted) interrupted = true;
 	else options.signal?.addEventListener("abort", onAbort, { once: true });

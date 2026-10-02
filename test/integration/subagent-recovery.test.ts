@@ -12,6 +12,7 @@ import { SubagentRegistry, type SubagentRecord } from "../../src/subagents/regis
 import { controlAuthority, reconstructRetained } from "../../src/subagents/retained-adoption.js";
 import { censusRetained } from "../../src/subagents/retained-census.js";
 import { createPaneChildSpawner } from "../../src/subagents/backend-pane.js";
+import { waitForSteeringAck } from "../../src/subagents/steering-ack-effect.js";
 import type { TerminalHost } from "../../src/terminal-host/types.js";
 import { RetainedHeadlessSupervisor, RetainedVisibleSupervisor } from "../../src/subagents/retained-supervisor.js";
 import { RetainedResults } from "../../src/subagents/retained-results.js";
@@ -96,7 +97,9 @@ function fixture(cut?: "starting" | "pre-release", backend: "headless" | "visibl
 			return { ok: true, agentName: "worker", paneId: "pane:1", pane: { host: "herdr", paneId: "pane:1" } };
 		}),
 	};
-	const paneBackend = createPaneChildSpawner({ processTree: operations, resolveLauncher: () => "/synthetic/sumocode" });
+	// Keep this plain-TS recovery fixture's fake ticks synchronous with waiter creation;
+	// fresh-process tests exercise the production lazy-import edge separately.
+	const paneBackend = createPaneChildSpawner({ processTree: operations, resolveLauncher: () => "/synthetic/sumocode", waitForSteeringAck });
 	const visibleSpawn = vi.fn((options: Parameters<typeof paneBackend>[0]): SpawnedChild => {
 		const child = paneBackend(options);
 		let seq = 0;

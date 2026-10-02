@@ -9,6 +9,7 @@ import { createPaneChildSpawner } from "./backend-pane.js";
 import { SubagentRegistry, type SubagentRecord } from "./registry.js";
 import { controlAuthority } from "./retained-adoption.js";
 import { RetainedVisibleSupervisor } from "./retained-supervisor.js";
+import { waitForSteeringAck } from "./steering-ack-effect.js";
 
 const stops: Array<() => void> = [];
 afterEach(() => {
@@ -60,7 +61,7 @@ function fixture(association = true, startFailure?: HostResult<StartedAgentPane>
 			type: "pane_process_info", process_info: { pane_id: "pane:1", shell_pid: 42,
 				foreground_process_group_id: association ? 42 : 99, foreground_processes: [{ pid: 42 }] },
 		} }) })) }, placement: { kind: "new-tab", label: "worker" } }, baseRef: "HEAD",
-	}, { onFailure, operations, spawn: createPaneChildSpawner({ processTree: operations, resolveLauncher: () => "/synthetic/sumocode" }),
+	}, { onFailure, operations, spawn: createPaneChildSpawner({ processTree: operations, resolveLauncher: () => "/synthetic/sumocode", waitForSteeringAck }),
 		buildManifest: async () => ({ baseRef: "HEAD", changedPaths: [], commits: 0, exit: "completed", durationMs: 1 }),
 	});
 	stops.push(() => { vi.mocked(operations.identityMatches).mockReturnValue("unknown"); try { owner.renew(); } catch { /* Dispose the fake owner without a signal. */ } });
@@ -80,6 +81,33 @@ function fixture(association = true, startFailure?: HostResult<StartedAgentPane>
 }
 
 describe("retained visible owner", () => {
+	it("owner shutdown drains steering without closing or signalling the retained pane", async () => {
+		const f = fixture(); await f.start();
+		const { child } = f.control();
+		const pending = child.send!("pending at owner shutdown");
+		const refused = expect(pending).rejects.toThrow("owner stopped");
+		f.owner.dispose();
+		await refused;
+		expect(readFileSync(join(f.taskDir, "control", "steer-1.txt"), "utf8")).toBe("pending at owner shutdown");
+		expect(f.owner.record.status).toBe("running");
+		expect(f.operations.signalTree).not.toHaveBeenCalled();
+		expect(f.host.closePane).not.toHaveBeenCalled();
+		// Only the existing response watcher remains, not an Effect poller.
+		expect(vi.getTimerCount()).toBe(1);
+		await expect(child.send!("late")).rejects.toThrow("owner stopped");
+	});
+	it("owner shutdown honors consumption before the next acknowledgement tick", async () => {
+		const f = fixture(); await f.start();
+		const { child } = f.control();
+		const pending = child.send!("consumed before owner shutdown");
+		const path = join(f.taskDir, "control", "steer-1.txt");
+		renameSync(path, `${path}.consumed`);
+		f.owner.dispose();
+		await expect(pending).resolves.toBeUndefined();
+		expect(f.operations.signalTree).not.toHaveBeenCalled();
+		expect(f.host.closePane).not.toHaveBeenCalled();
+		expect(vi.getTimerCount()).toBe(1);
+	});
 	it("persists the nonce command, original tree and inspected pane before release", async () => {
 		const f = fixture();
 		expect(existsSync(join(f.taskDir, "launch.release"))).toBe(false);

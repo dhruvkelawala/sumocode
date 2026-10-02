@@ -22,6 +22,7 @@ export const EXTENSION_ASSETS = [
 export const EXTENSION_RUNTIME_OUTPUTS = [
 	"sumocode-extension.bundle.mjs",
 	"sumocode-extension.bundle.mjs.map",
+	"steering-ack.effect.mjs",
 	...EXTENSION_ASSETS.map(({ output }) => output),
 ];
 
@@ -29,6 +30,7 @@ export const EXTENSION_RECIPE_INPUTS = [
 	"scripts/build-extension.mjs",
 	"scripts/lib/extension-bundle.mjs",
 	"scripts/lib/production-boundaries.mjs",
+	"scripts/lib/steering-ack-bundle.mjs",
 	"tsconfig.json",
 	// package.json ships in npm/pnpm tarballs and pins the exact esbuild version.
 	"package.json",

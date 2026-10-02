@@ -165,6 +165,7 @@ describe("native build entry", () => {
 			mkdirSync(dirname(productionBoundaries), { recursive: true });
 			copyFileSync(new URL("./lib/production-boundaries.mjs", import.meta.url), productionBoundaries);
 			copyFileSync(new URL("./lib/native-artifact.mjs", import.meta.url), join(root, "scripts/lib/native-artifact.mjs"));
+			copyFileSync(new URL("./lib/steering-ack-bundle.mjs", import.meta.url), join(root, "scripts/lib/steering-ack-bundle.mjs"));
 			write(join(root, "node_modules/esbuild/package.json"), '{"type":"module","exports":"./index.js"}');
 			write(join(root, "node_modules/esbuild/index.js"), 'export function build() { throw new Error("unexpected-build"); }');
 			write(join(root, "scripts/instrument-pi-startup.mjs"), "export function instrumentPiStartup() {}\n");

@@ -18,6 +18,7 @@ export class RetainedAnchor {
 	private started = false;
 	private child?: ProcessTreeMemberAnchor;
 	private childExited = false;
+	private stopObservation: () => void = () => undefined;
 
 	public constructor(
 		spawnImpl: typeof spawn,
@@ -44,7 +45,7 @@ export class RetainedAnchor {
 		this.proc = spawnImpl(node, ["-e", program, `sumocode-retained-anchor:${options.nonce ?? randomUUID()}`], {
 			cwd: options.cwd, env: options.env, shell: false, detached: true, stdio: ["pipe", "pipe", "pipe", "ipc"],
 		}) as ChildProcessWithoutNullStreams;
-		this.proc.on("message", (message: unknown) => {
+		const onMessage = (message: unknown): void => {
 			try {
 				this.assertLive();
 				if (!this.started || !isRecord(message)) throw new Error();
@@ -61,15 +62,26 @@ export class RetainedAnchor {
 					callbacks.exited(message.code, message.signal);
 				} else throw new Error();
 			} catch { callbacks.refused(new Error("retained anchor protocol refused")); }
-		});
-		this.proc.once("exit", () => {
+		};
+		const onExit = (): void => {
 			this.exited = true;
 			if (!this.killing) callbacks.refused(new Error("retained anchor exited unexpectedly"));
-		});
-		this.proc.once("disconnect", () => {
+		};
+		const onDisconnect = (): void => {
 			if (!this.killing) callbacks.refused(new Error("retained anchor channel lost"));
-		});
+		};
+		this.proc.on("message", onMessage);
+		this.proc.once("exit", onExit);
+		this.proc.once("disconnect", onDisconnect);
+		this.stopObservation = () => {
+			this.proc.removeListener("message", onMessage);
+			this.proc.removeListener("exit", onExit);
+			this.proc.removeListener("disconnect", onDisconnect);
+		};
 	}
+
+	/** Release local observation only; this is never authority to signal or close a retained child. */
+	public dispose(): void { this.stopObservation(); }
 
 	public start(): void {
 		this.assertLive();

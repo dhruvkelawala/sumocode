@@ -6,7 +6,7 @@ import { pathToFileURL } from "node:url";
 import { build } from "esbuild";
 import { afterAll, expect, it } from "vitest";
 import { assertNoEffectInEagerClosure, assertNoProductionDependencyLeakage, bundleJavaScriptText, moduleSpecifiers } from "./lib/production-boundaries.mjs";
-import { buildSteeringAckBundle, STEERING_ACK_OUTPUT, steeringAckBoundary } from "./lib/steering-ack-bundle.mjs";
+import { buildSteeringAckBundle, HEADLESS_CLEANUP_OUTPUT, STEERING_ACK_OUTPUT, steeringAckBoundary } from "./lib/steering-ack-bundle.mjs";
 
 const root = resolve(import.meta.dirname, "..");
 const directories = [];
@@ -27,31 +27,34 @@ it.each(entries)("%s stays cold in source and bundled profiles; its lazy artifac
 	assertNoEffectInEagerClosure(result.metafile, entry, entry);
 	assertNoProductionDependencyLeakage(result.metafile, entry, text);
 	if (entry === "src/sumo-tui/rpc/host.ts") expect(moduleSpecifiers(text)).not.toContain(`./${STEERING_ACK_OUTPUT}`);
-	else expect(moduleSpecifiers(text)).toContain(`./${STEERING_ACK_OUTPUT}`);
+	else {
+		expect(moduleSpecifiers(text)).toContain(`./${STEERING_ACK_OUTPUT}`);
+		expect(moduleSpecifiers(text)).toContain(`./${HEADLESS_CLEANUP_OUTPUT}`);
+	}
 	expect(Object.keys(result.metafile.inputs).some((path) => path.includes("/effect/"))).toBe(false);
 	await writeFile(output, text);
 	const lazy = await buildSteeringAckBundle(root, directory);
 	const lazyText = bundleJavaScriptText(lazy.outputFiles);
 	expect(Object.keys(lazy.metafile.inputs).some((path) => path.includes("/effect/"))).toBe(true);
 	expect(moduleSpecifiers(lazyText).every((path) => path.startsWith("node:"))).toBe(true);
-	await writeFile(join(directory, STEERING_ACK_OUTPUT), lazyText);
+	for (const file of lazy.outputFiles) await writeFile(file.path, file.contents);
 
 	// Fresh processes observe actual evaluation, not just source import spelling.
-	for (const profile of ["source", "bundle"]) {
-		const home = join(directory, profile);
+	for (const profile of ["source", "bundle"]) for (const subject of ["steering-ack", "headless-cleanup"]) {
+		const home = join(directory, `${profile}-${subject}`);
 		await mkdir(home);
 		const diagnostic = join(home, "diagnostic.jsonl");
-		const probe = join(directory, `probe-${profile}.mjs`);
+		const probe = join(directory, `probe-${profile}-${subject}.mjs`);
 		await writeFile(probe, `
 import { createJiti } from "jiti";
 const effects = [];
 const original = Symbol.for;
-Symbol.for = (key) => { if (key.startsWith("effect/")) effects.push(key); return original(key); };
+Symbol.for = (key) => { if (key.startsWith("effect/") || key.startsWith("~effect/")) effects.push(key); return original(key); };
 const jiti = createJiti(import.meta.url);
 await ${profile === "source" ? `jiti.import(${JSON.stringify(join(root, entry))})` : `import(${JSON.stringify(pathToFileURL(output).href)})`};
 if (effects.length) throw new Error("eager Effect evaluation: " + effects.join(", "));
-await ${profile === "source" ? `jiti.import(${JSON.stringify(join(root, "src/subagents/steering-ack-effect.ts"))})` : `import(${JSON.stringify(pathToFileURL(join(directory, STEERING_ACK_OUTPUT)).href)})`};
-if (!effects.length) throw new Error("probe did not observe lazy Effect evaluation");
+await ${profile === "source" ? `jiti.import(${JSON.stringify(join(root, `src/subagents/${subject}-effect.ts`))})` : `import(${JSON.stringify(pathToFileURL(join(directory, subject === "steering-ack" ? STEERING_ACK_OUTPUT : HEADLESS_CLEANUP_OUTPUT)).href)})`};
+if (!effects.length) throw new Error("probe did not observe lazy ${subject} Effect evaluation");
 console.log("cold until steering");
 `);
 		const stdout = execFileSync(process.execPath, [probe], {
@@ -60,11 +63,12 @@ console.log("cold until steering");
 		});
 		expect(stdout).toContain("cold until steering");
 		const events = (await readFile(diagnostic, "utf8")).trim().split("\n").map((line) => JSON.parse(line).event);
-		expect(events.filter((event) => event === "visible_steering_effect_loaded")).toHaveLength(1);
+		expect(events.filter((event) => event === "visible_steering_effect_loaded")).toHaveLength(subject === "steering-ack" ? 1 : 0);
+		expect(events.filter((event) => event === "headless_cleanup_effect_loaded")).toHaveLength(subject === "headless-cleanup" ? 1 : 0);
 	}
 }, 30_000);
 
-it.each(["import './steering-ack-effect.js';", "void import('./steering-ack-effect.js');"])("refuses an unreviewed implementation edge: %s", async (contents) => {
+it.each(["import './steering-ack-effect.js';", "void import('./steering-ack-effect.js');", "import './headless-cleanup-effect.js';", "void import('./headless-cleanup-effect.js');"])("refuses an unreviewed implementation edge: %s", async (contents) => {
 	await expect(build({
 		stdin: { contents, resolveDir: join(root, "src/subagents"), sourcefile: "wrong-owner.ts" },
 		bundle: true, write: false, plugins: [steeringAckBoundary], logLevel: "silent",

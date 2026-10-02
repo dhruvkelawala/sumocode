@@ -941,6 +941,7 @@ export class SubagentManager {
 		const lines = new Map<string, string>();
 		const targets: string[] = [];
 		const admissions = new Map<string, Promise<void>>();
+		const synchronousRefusals = new Map<string, unknown>();
 		for (const id of ids) {
 			const snapshot = this.snapshots.get(id);
 			if (!snapshot) {
@@ -967,7 +968,11 @@ export class SubagentManager {
 				else if (this.pendingSpawns.has(id)) this.cancelledSetupIds.add(id);
 				void this.startSettle(id, { kind: "interrupted" });
 			} else {
-				admissions.set(id, Promise.resolve(this.children.get(id)?.child.interrupt()));
+				try { admissions.set(id, Promise.resolve(this.children.get(id)?.child.interrupt())); }
+				catch (error) {
+					synchronousRefusals.set(id, error);
+					admissions.set(id, Promise.reject(error));
+				}
 			}
 			targets.push(id);
 		}
@@ -975,12 +980,15 @@ export class SubagentManager {
 			const retained = this.retained.has(id);
 			try {
 				await admissions.get(id);
-			} catch {
+			} catch (error) {
 				if (retained) {
+					if (synchronousRefusals.has(id)) return;
 					this.blockRetained(id, "ambiguous");
 					lines.set(id, `${id} control unavailable; inspect retained evidence`);
-					return;
+				} else {
+					lines.set(id, `unable to cancel ${id}: ${error instanceof Error ? error.message : String(error)}`);
 				}
+				return;
 			}
 			try {
 				await this.waitForSettle(id, CANCEL_WAIT_MS);
@@ -994,6 +1002,9 @@ export class SubagentManager {
 			}
 			lines.set(id, `Cancelled ${id}`);
 		}));
+		for (const id of ids) {
+			if (this.retained.has(id) && synchronousRefusals.has(id)) throw synchronousRefusals.get(id);
+		}
 		void this.scheduleDequeue();
 		return ids.map((id) => lines.get(id) ?? `${id} is unknown`);
 	}

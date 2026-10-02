@@ -2465,6 +2465,29 @@ pi: { exec: vi.fn() } as never,
 		expect(manager.get(id)?.usage.costUsd).toBe(0.05);
 	});
 
+	it.each(["throw", "reject"])("a cleanup %s cannot report cancellation or block sibling interrupts", async (failure) => {
+		const interrupts: string[] = [];
+		const emitters = new Map<string, (event: SubagentEvent) => void>();
+		const manager = new SubagentManager((task) => ({
+			events: (emit) => { emitters.set(task.id, emit); },
+			interrupt: () => {
+				interrupts.push(task.id);
+				if (task.id.includes("first")) {
+					if (failure === "throw") throw new Error("cleanup refused");
+					return Promise.reject(new Error("cleanup refused"));
+				}
+				emitters.get(task.id)?.({ kind: "run-settled", outcome: { kind: "interrupted" } });
+			},
+		}), { captureGitContext: async () => ({ baseRef: "base-ref" }), buildCompletionManifest: fakeManifestBuilder });
+		const first = await manager.spawn({ prompt: "p", title: "first", cwd: "/tmp" });
+		const second = await manager.spawn({ prompt: "p", title: "second", cwd: "/tmp" });
+		if (!("id" in first) || !("id" in second)) throw new Error("unexpected capacity refusal");
+		const cancellation = manager.cancel([first.id, second.id]);
+		expect(interrupts).toEqual([first.id, second.id]);
+		await expect(cancellation).resolves.toEqual([`unable to cancel ${first.id}: cleanup refused`, `Cancelled ${second.id}`]);
+		expect(manager.get(first.id)?.status).toBe("running");
+	});
+
 	it("interrupts every batch-cancel target before awaiting any settle", async () => {
 		const interrupts: string[] = [];
 		const emitters = new Map<string, (event: import("./domain.js").SubagentEvent) => void>();

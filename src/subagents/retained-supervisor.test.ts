@@ -12,6 +12,7 @@ import { createPiChildSpawner } from "./backend-pi.js";
 import { SubagentRegistry, type RegistryProcess, type SubagentRecord } from "./registry.js";
 import { controlAuthority } from "./retained-adoption.js";
 import { createRetainedHeadlessLaunchGate, RetainedHeadlessSupervisor } from "./retained-supervisor.js";
+import { cleanupWithTestClock } from "./testing/headless-cleanup.js";
 
 // oxlint-disable-next-line anti-slop/no-module-mocking -- filesystem publication faults; all other I/O uses private real files.
 vi.mock("node:fs", async (original) => ({ ...await original<typeof import("node:fs")>() }));
@@ -60,15 +61,18 @@ function retainedFixture(attach = false, onManifestWritten?: () => void) {
 	const f = fixture();
 	const proc = Object.assign(new EventEmitter(), {
 		pid: 4242, stdout: new EventEmitter(), stderr: new EventEmitter(),
-		stdin: { on: vi.fn(), end: vi.fn(), write: vi.fn() }, kill: vi.fn(),
+		stdin: { on: vi.fn(), removeListener: vi.fn(), end: vi.fn(), write: vi.fn() }, kill: vi.fn(),
 	});
 	Object.assign(proc, { send: vi.fn(() => proc.emit("message", { kind: "started", child: { pid: 4343, processStartTime: "child-birth" } })) });
+	// Test-owned observer permits deliberately emitted errors after backend disposal.
+	proc.on("error", vi.fn());
 	const spawn = vi.fn(() => proc);
 	// SAFETY: fake piped process; the production backend parser owns these streams.
-	const backend = createPiChildSpawner(spawn as never, () => undefined, () => "/selected/pi", () => undefined, f.operations);
+	const backend = createPiChildSpawner(spawn as never, () => undefined, () => "/selected/pi", () => undefined, f.operations, cleanupWithTestClock);
 	let releaseManifest!: (manifest: CompletionManifest) => void;
 	const manifest = new Promise<CompletionManifest>((resolve) => { releaseManifest = resolve; });
 	const subscriptions = vi.fn();
+	let atManifestOrStopped = false;
 	if (attach) f.registry.create(f.record);
 	const owner = new RetainedHeadlessSupervisor({
 		registry: f.registry, initial: f.record, supervisor: f.supervisor,
@@ -84,15 +88,19 @@ function retainedFixture(attach = false, onManifestWritten?: () => void) {
 				child.events(emit);
 			} };
 		},
-		buildManifest: () => manifest,
+		buildManifest: () => { atManifestOrStopped = true; return manifest; },
 		onManifestWritten,
 	});
+	void owner.settlement.then(() => { atManifestOrStopped = true; });
 	const release = (changedPaths: readonly string[] = []) => releaseManifest({ baseRef: "host-base", headRef: "host-head", changedPaths, commits: 0, exit: "completed", durationMs: 10 });
 	const finish = async (code = 0) => {
 		proc.emit("message", { kind: "exited", code, signal: null });
 		for (let i = 0; i < 10; i++) await Promise.resolve();
+		// A close is not empty-tree evidence; this fixture proves both explicitly.
+		vi.mocked(f.operations.isTreeEmpty).mockReturnValue(true);
 		proc.emit("close", null, "SIGKILL");
-		for (let i = 0; i < 10; i++) await Promise.resolve();
+		// WAIT-CLASS: poll-interval — await the public publication boundary, not a microtask count.
+		await vi.waitFor(() => expect(atManifestOrStopped).toBe(true));
 	};
 	return { ...f, proc, spawn, subscriptions, owner, release, finish };
 }
@@ -193,11 +201,10 @@ describe("retained supervisor handle ownership", () => {
 	});
 	for (const [cut, loss] of [["TERM", "expiry"], ["KILL", "expiry"], ["TERM", "replacement"], ["KILL", "replacement"]] as const) {
 		it(`stops the real kernel on lease ${loss} before ${cut}, with no late backend effects`, async () => {
+			vi.useFakeTimers();
 			const f = retainedFixture();
 			f.proc.emit("spawn");
 			await f.owner.ready;
-			let releaseWait!: (empty: boolean) => void;
-			f.operations.waitForTreeEmpty = () => new Promise((resolve) => { releaseWait = resolve; });
 			const lose = (): void => {
 				f.setNow(61_000);
 				if (loss === "replacement") {
@@ -213,9 +220,10 @@ describe("retained supervisor handle ownership", () => {
 			if (cut === "TERM") lose();
 			f.proc.stdout.emit("data", Buffer.alloc(CHILD_JSON_FRAME_MAX_BYTES + 1, 0x73));
 			if (cut === "KILL") {
-				await new Promise<void>((resolve) => setImmediate(resolve));
+				await vi.waitFor(() => expect(f.operations.signalTree).toHaveBeenCalledTimes(1));
 				lose();
-				releaseWait(false);
+				// WAIT-CLASS: clock-contract — cross the scoped TERM deadline after losing the writer fence.
+				await vi.advanceTimersByTimeAsync(5000);
 			}
 			expect(await f.owner.settlement).toBe("ambiguous");
 			expect(f.operations.signalTree).toHaveBeenCalledTimes(cut === "TERM" ? 0 : 1);
@@ -226,7 +234,7 @@ describe("retained supervisor handle ownership", () => {
 			f.proc.emit("close", 0);
 			f.proc.emit("spawn");
 			f.proc.emit("error", new Error("late child callback"));
-			await new Promise<void>((resolve) => setImmediate(resolve));
+			await vi.advanceTimersByTimeAsync(0);
 			expect(f.registry.get(f.record.id)).toEqual(unchanged);
 			expect(() => f.owner.renew()).toThrow(/stopped/);
 			expect(f.proc.stdin.write).toHaveBeenCalledTimes(1);
@@ -689,7 +697,7 @@ describe("retained supervisor handle ownership", () => {
 		const f = fixture();
 		const proc = Object.assign(new EventEmitter(), {
 			pid: 4242, stdout: new EventEmitter(), stderr: new EventEmitter(),
-			stdin: { on: vi.fn(), end: vi.fn(), write: vi.fn() }, kill: vi.fn(),
+			stdin: { on: vi.fn(), removeListener: vi.fn(), end: vi.fn(), write: vi.fn() }, kill: vi.fn(),
 		});
 		const spawn = vi.fn(() => proc);
 		// SAFETY: fake piped process; the production parser and start gate run unchanged.
@@ -719,7 +727,7 @@ describe("retained supervisor headless launch admission", () => {
 		const f = fixture();
 		const proc = Object.assign(new EventEmitter(), {
 			pid: 4242, stdout: new EventEmitter(), stderr: new EventEmitter(),
-			stdin: { on: vi.fn(), end: vi.fn(), write: vi.fn(() => {
+			stdin: { on: vi.fn(), removeListener: vi.fn(), end: vi.fn(), write: vi.fn(() => {
 				expect(f.registry.get("sa-proof")).toMatchObject({ status: "running", child: { identity: { pid: 4242 } } });
 			}) }, kill: vi.fn(),
 		});

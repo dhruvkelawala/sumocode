@@ -17,6 +17,7 @@ const extensionOutputs = [
 	"sumocode-extension.bundle.mjs",
 	"sumocode-extension.bundle.mjs.map",
 	"steering-ack.effect.mjs",
+	"headless-cleanup.effect.mjs",
 	"assets/sumo-face.ans",
 	"bounded-terminal-runner.mjs",
 ];

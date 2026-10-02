@@ -11,35 +11,73 @@ import {
 	TRUNCATED_HEAD_MARKER,
 	TRUNCATED_TAIL_MARKER,
 } from "../child-protocol.js";
-import { createPiChildSpawner, resolveClaudeOauthAdapterEntry, resolvePiBinary, resolvePiChildModelBootstrapEntry, retainedProcessTree } from "./backend-pi.js";
+import { createPiChildSpawner as createRealPiChildSpawner, resolveClaudeOauthAdapterEntry, resolvePiBinary, resolvePiChildModelBootstrapEntry, retainedProcessTree } from "./backend-pi.js";
 import type { SubagentEvent } from "./domain.js";
 import type { SpawnedChild, HeadlessLaunchGate } from "./backend-pi.js";
 import type { ProcessTreeOperations } from "../background-tasks/process-tree.js";
 import { prepareRetainedBootstrap, type RetainedBootstrapDescriptor } from "./retained-bootstrap.js";
 import type { SubagentRecord } from "./registry.js";
 import { RETAINED_BOOTSTRAP_ENV, publishFactoryReceipt, type BootstrapReceiptBinding } from "./retained-bootstrap-receipt.js";
+import { cleanupWithTestClock } from "./testing/headless-cleanup.js";
 
 const runnerEnvironment = process.env;
 const testTmpdir = tmpdir();
 beforeEach(() => {
 	process.env = { PATH: "/synthetic/bin", HOME: "/synthetic/home", TMPDIR: testTmpdir };
 });
-afterEach(() => { process.env = runnerEnvironment; });
+afterEach(() => { process.env = runnerEnvironment; vi.useRealTimers(); });
 
 class FakeProcess extends EventEmitter {
-	public readonly stdin = { on: vi.fn(), write: vi.fn(), end: vi.fn() };
+	public constructor() { super(); this.on("error", () => undefined); }
+	public readonly stdin = { on: vi.fn(), removeListener: vi.fn(), write: vi.fn(), end: vi.fn() };
 	public readonly stdout = new EventEmitter();
 	public readonly stderr = new EventEmitter();
 	public pid: number | undefined = 4242;
 	public exitCode = null;
 	public signalCode = null;
 	public send = vi.fn((_message: { binary: string; args: string[] }) => this.emit("message", { kind: "started", child: { pid: 4343, processStartTime: "original-birth" } }));
+	public closed = false;
+	public treeEmpty = false;
+	public override emit(event: string | symbol, ...args: Parameters<EventEmitter["emit"]> extends [string | symbol, ...infer Rest] ? Rest : never): boolean {
+		if (event === "close") { this.closed = true; this.treeEmpty = true; }
+		return super.emit(event, ...args);
+	}
 	public killed = false;
 	public kill = vi.fn(() => {
 		this.killed = true;
 		return true;
 	});
 }
+
+// Fake process identities must never be probed/signalled on the real OS. The
+// real scoped runner is injected, just as the steering backend fixtures do.
+const createPiChildSpawner = (...args: Parameters<typeof createRealPiChildSpawner>) => {
+	const [spawn, adapter, binary, bootstrap, operations, runner] = args;
+	let proc: FakeProcess | undefined;
+	const trackedSpawn = (...parameters: Parameters<NonNullable<typeof spawn>>) => {
+		const child = spawn!(...parameters);
+		if (!(child instanceof FakeProcess)) throw new Error("expected FakeProcess fixture");
+		proc = child;
+		return child;
+	};
+	const fakeOperations: ProcessTreeOperations = {
+		captureStartTime: () => "fake-command",
+		captureTreeVerification: (identity) => ({ members: [{ pid: identity.pid, processStartTime: "fake-birth" }] }),
+		identityMatches: () => "same", verificationMatches: () => "same",
+		isTreeEmpty: () => proc?.treeEmpty ?? true,
+		signalTree: async (identity, signal) => {
+			if (vi.isMockFunction(process.kill)) {
+				const result = await retainedProcessTree.signalTree(identity, signal);
+				if (!result.ok) return result;
+			}
+			if (signal === "SIGKILL" && proc) proc.treeEmpty = true;
+			return { ok: true, gone: false };
+		},
+		waitForTreeEmpty: async () => { throw new Error("unscoped wait used"); },
+	};
+	// SAFETY: only the three-argument piped spawn overload is used, and the returned fixture is checked above.
+	return createRealPiChildSpawner(trackedSpawn as never, adapter ?? (() => undefined), binary, bootstrap, operations ?? fakeOperations, runner ?? cleanupWithTestClock);
+};
 
 const collect = (events: SpawnedChild["events"]): SubagentEvent[] => {
 	// oxlint-disable-next-line anti-slop/no-runtime-typeof -- backend subscriptions explicitly support callback or AsyncIterable forms.
@@ -137,7 +175,7 @@ describe("retained headless launch gate", () => {
 		expect(spawn).toHaveBeenCalledTimes(1);
 		const kill = vi.spyOn(process, "kill").mockImplementation(() => true);
 		try {
-			child.interrupt();
+			expect(() => child.interrupt()).toThrow("expired");
 			proc.emit("close", 0);
 			expect(kill).not.toHaveBeenCalled();
 			expect(events).toEqual([{ kind: "run-started" }]);
@@ -212,19 +250,20 @@ function effectFixture(retainedBootstrap?: RetainedBootstrapDescriptor) {
 		beforeSignal: () => { fence(); return tree; }, onRefused: refused,
 	};
 	const signals: string[] = [];
-	let finishWait!: (empty: boolean) => void;
+	let empty = false;
 	const operations: ProcessTreeOperations = {
 		captureStartTime: () => { throw new Error("must not recapture birth"); },
 		captureTreeVerification: () => { throw new Error("must not recapture anchors"); },
 		identityMatches: vi.fn<ProcessTreeOperations["identityMatches"]>(() => "same"),
-		verificationMatches: () => "same", isTreeEmpty: () => false,
+		verificationMatches: () => "same", isTreeEmpty: () => empty,
 		signalTree: async (identity, signal, verification) => {
 			expect(identity).toEqual(tree.identity);
 			expect(verification).toEqual(tree.verification);
 			signals.push(signal);
+			if (signal === "SIGKILL") empty = true;
 			return { ok: true, gone: signal === "SIGKILL" };
 		},
-		waitForTreeEmpty: () => new Promise<boolean>((resolve) => { finishWait = resolve; }),
+		waitForTreeEmpty: async () => { throw new Error("unscoped wait used"); },
 	};
 	const spawn = vi.fn((_binary: string, _argv: string[], _options: { env: NodeJS.ProcessEnv }) => proc);
 	// SAFETY: fake piped child and process operations; no OS process is spawned/signalled.
@@ -235,7 +274,7 @@ function effectFixture(retainedBootstrap?: RetainedBootstrapDescriptor) {
 	});
 	const events = collect(child.events);
 	return { proc, controller, child, events, signals, refused, operations, spawn, gate,
-		lose: () => { live = false; }, revive: () => { live = true; }, finishWait: (empty = false) => finishWait(empty) };
+		lose: () => { live = false; }, revive: () => { live = true; }, finishWait: async (gone = false) => { empty = gone; await vi.advanceTimersByTimeAsync(5000); } };
 }
 
 function sourceBootstrap() {
@@ -275,8 +314,7 @@ describe("retained source factory readiness", () => {
 			expect(f.proc.stdin.write).not.toHaveBeenCalled();
 			expect(f.proc.stdin.end).not.toHaveBeenCalled();
 			expect(f.signals).toEqual(["SIGTERM"]);
-			f.finishWait(true);
-			await Promise.resolve();
+			await f.finishWait(true);
 			f.proc.emit("close", 1);
 			await vi.advanceTimersByTimeAsync(0);
 			expect(vi.getTimerCount()).toBe(0);
@@ -378,7 +416,7 @@ describe("retained headless effect fencing", () => {
 				if (trigger === "abort") f.controller.abort();
 				else if (trigger === "protocol") f.proc.stdout.emit("data", Buffer.alloc(CHILD_JSON_FRAME_MAX_BYTES + 1, 0x73));
 				else await vi.advanceTimersByTimeAsync(10_000);
-				await Promise.resolve();
+				await vi.advanceTimersByTimeAsync(0);
 				expect(f.signals).toEqual([]);
 				expect(f.refused).toHaveBeenCalledTimes(1);
 				f.revive();
@@ -397,28 +435,51 @@ describe("retained headless effect fencing", () => {
 
 	for (const cut of ["lost", "closed", "closed-empty", "normal", "recycled", "rejected"] as const) {
 		it(`handles ${cut} between TERM and KILL using original anchors only`, async () => {
+			vi.useFakeTimers();
 			const f = effectFixture();
 			f.proc.emit("spawn");
 			await f.child.ready;
 			f.controller.abort();
-			await new Promise<void>((resolve) => setImmediate(resolve));
+			await vi.advanceTimersByTimeAsync(0);
 			expect(f.signals).toEqual(["SIGTERM"]);
 			if (cut === "lost") f.lose();
 			if (cut === "closed" || cut === "closed-empty") f.proc.emit("close", null, "SIGTERM");
 			if (cut === "recycled") vi.mocked(f.operations.identityMatches).mockReturnValue("different");
 			if (cut === "rejected") f.operations.signalTree = async () => { throw new Error("OS refused"); };
-			f.finishWait(cut === "closed-empty");
-			await new Promise<void>((resolve) => setImmediate(resolve));
+			await f.finishWait(cut === "closed-empty");
 			expect(f.signals).toEqual(cut === "normal" ? ["SIGTERM", "SIGKILL"] : ["SIGTERM"]);
 			if (cut !== "closed" && cut !== "closed-empty") f.proc.emit("close", null, "SIGKILL");
-			await new Promise<void>((resolve) => setImmediate(resolve));
+			await vi.advanceTimersByTimeAsync(0);
 			const settled = f.events.filter((event) => event.kind === "run-settled");
 			expect(settled).toHaveLength(cut === "normal" || cut === "closed-empty" ? 1 : 0);
 			expect(f.refused).toHaveBeenCalledTimes(cut === "normal" || cut === "closed-empty" ? 0 : 1);
-			f.child.interrupt();
+			void f.child.interrupt();
 			expect(f.proc.kill).not.toHaveBeenCalled();
+			vi.useRealTimers();
 		});
 	}
+
+	it("an owned retained startup error cleans the tree before publishing failure", async () => {
+		vi.useFakeTimers();
+		const f = effectFixture();
+		f.proc.emit("spawn");
+		await f.child.ready;
+		f.proc.emit("error", new Error("owned startup failed"));
+		// WAIT-CLASS: clock-contract — start scoped cleanup while the launch fences still authorize the tree.
+		await vi.advanceTimersByTimeAsync(0);
+		expect(f.signals).toEqual(["SIGTERM"]);
+		expect(f.events.filter((event) => event.kind === "run-settled")).toEqual([]);
+		// WAIT-CLASS: clock-contract — exhaust TERM, then provide whole-tree-empty and pipe-close evidence.
+		await f.finishWait();
+		f.proc.emit("close", null, "SIGKILL");
+		await vi.advanceTimersByTimeAsync(0);
+		expect(f.signals).toEqual(["SIGTERM", "SIGKILL"]);
+		expect(f.events.filter((event) => event.kind === "run-settled")).toEqual([
+			{ kind: "run-settled", outcome: { kind: "failed", errorText: "retained anchor process failed", partialText: undefined } },
+		]);
+		expect(f.refused).not.toHaveBeenCalled();
+		expect(vi.getTimerCount()).toBe(0);
+	});
 
 	it("rechecks the writer after slow process verification, before the actual signal", async () => {
 		const f = effectFixture();
@@ -440,7 +501,7 @@ describe("retained headless effect fencing", () => {
 		await expect(f.child.ready).rejects.toThrow("writer lost");
 		expect(f.proc.stdin.write).toHaveBeenCalledExactlyOnceWith("private");
 		expect(f.proc.stdin.end).not.toHaveBeenCalled();
-		f.child.interrupt();
+		expect(() => f.child.interrupt()).toThrow("writer lost");
 		f.proc.emit("close", 0);
 		expect(f.signals).toEqual([]);
 		expect(f.events).toEqual([{ kind: "run-started" }]);
@@ -1050,7 +1111,7 @@ describe("spawnPiChild", () => {
 		expect(event.argsPreview?.length).toBeLessThanOrEqual(160);
 	});
 
-	it("reports abort as interrupted", () => {
+	it("reports abort as interrupted", async () => {
 		const proc = new FakeProcess();
 		const controller = new AbortController();
 		// SAFETY: the FakeProcess double satisfies the SpawnLike contract used on this path.
@@ -1059,8 +1120,10 @@ describe("spawnPiChild", () => {
 		const events = collect(child.events as (emit: (event: SubagentEvent) => void) => void);
 		const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
 		controller.abort();
+		await new Promise<void>((resolve) => setImmediate(resolve));
 		killSpy.mockRestore();
 		proc.emit("close", null);
+		await child.interrupt();
 		expect(events.at(-1)).toEqual({ kind: "run-settled", outcome: { kind: "interrupted", partialText: undefined } });
 	});
 
@@ -1075,7 +1138,7 @@ describe("spawnPiChild", () => {
 		expect(events.at(-1)).toEqual({ kind: "run-settled", outcome: { kind: "failed", errorText: "boom", partialText: undefined } });
 	});
 
-	it("keeps an oversized-frame run active until forced child close", () => {
+	it("keeps an oversized-frame run active until forced child close", async () => {
 		vi.useFakeTimers();
 		const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
 		try {
@@ -1089,16 +1152,18 @@ describe("spawnPiChild", () => {
 				Buffer.alloc(CHILD_JSON_FRAME_MAX_BYTES + 1, 0x73),
 				Buffer.from("\n"),
 			]));
+			await vi.advanceTimersByTimeAsync(0);
 			expect(events.filter((event) => event.kind === "run-settled")).toEqual([]);
 			expect(killSpy).toHaveBeenCalledWith(-4242, "SIGTERM");
 
-			vi.advanceTimersByTime(5001);
+			await vi.advanceTimersByTimeAsync(5001);
 			expect(killSpy).toHaveBeenCalledWith(-4242, "SIGKILL");
 			expect(events.filter((event) => event.kind === "run-settled")).toEqual([]);
 
 			proc.emit("close", null, "SIGKILL");
 			proc.emit("error", new Error("late child error"));
 			proc.emit("close", 1);
+			await vi.advanceTimersByTimeAsync(0);
 			const settled = events.filter((event) => event.kind === "run-settled");
 			expect(settled).toHaveLength(1);
 			expect(settled[0]).toMatchObject({ outcome: { kind: "failed", errorText: expect.stringContaining(`exceeded ${CHILD_JSON_FRAME_MAX_BYTES} bytes`) } });
@@ -1109,7 +1174,7 @@ describe("spawnPiChild", () => {
 		}
 	});
 
-	it("keeps protocol failure ownership when the child errors before close", () => {
+	it("keeps protocol failure ownership when the child errors before close", async () => {
 		vi.useFakeTimers();
 		const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
 		try {
@@ -1124,10 +1189,12 @@ describe("spawnPiChild", () => {
 				Buffer.from("\n"),
 			]));
 			proc.emit("error", new Error("termination failed"));
+			await vi.advanceTimersByTimeAsync(0);
 			expect(killSpy).toHaveBeenCalledWith(-4242, "SIGTERM");
 			expect(events.filter((event) => event.kind === "run-settled")).toEqual([]);
 
 			proc.emit("close", null, "SIGTERM");
+			await vi.advanceTimersByTimeAsync(25);
 			const settled = events.filter((event) => event.kind === "run-settled");
 			expect(settled).toHaveLength(1);
 			expect(settled[0]).toMatchObject({ outcome: { kind: "failed", errorText: expect.stringContaining(`exceeded ${CHILD_JSON_FRAME_MAX_BYTES} bytes`) } });
@@ -1282,7 +1349,7 @@ describe("spawnPiChild", () => {
 		expect(args).not.toContain("-e");
 	});
 
-	it("spawns the child detached and signals the whole process group on interrupt", () => {
+	it("spawns the child detached and signals the whole process group on interrupt", async () => {
 		const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
 		try {
 			const proc = new FakeProcess();
@@ -1295,15 +1362,18 @@ describe("spawnPiChild", () => {
 			expect(spawn.mock.calls[0]?.[0]).toBe(resolvePiBinary());
 			expect(spawn.mock.calls[0]?.[2].detached).toBe(true);
 			controller.abort();
+			await new Promise<void>((resolve) => setImmediate(resolve));
 			// Group signal: negative pid targets the whole tree, not just pi.
 			expect(killSpy).toHaveBeenCalledWith(-4242, "SIGTERM");
 			expect(proc.kill).not.toHaveBeenCalled();
+			proc.emit("close", null, "SIGTERM");
+			await child.interrupt();
 		} finally {
 			killSpy.mockRestore();
 		}
 	});
 
-	it("falls back to single-pid kill when the group signal fails", () => {
+	it("reports refused group signalling without a dangerous single-pid fallback", async () => {
 		const killSpy = vi.spyOn(process, "kill").mockImplementation(() => { throw new Error("ESRCH"); });
 		try {
 			const proc = new FakeProcess();
@@ -1313,13 +1383,15 @@ describe("spawnPiChild", () => {
 			// SAFETY: the pane/pi backends always expose the callback events form here.
 			collect(child.events as (emit: (event: SubagentEvent) => void) => void);
 			controller.abort();
-			expect(proc.kill).toHaveBeenCalledWith("SIGTERM");
+			await new Promise<void>((resolve) => setImmediate(resolve));
+			expect(proc.kill).not.toHaveBeenCalled();
+			await expect(child.interrupt()).rejects.toThrow(/cleanup/);
 		} finally {
 			killSpy.mockRestore();
 		}
 	});
 
-	it("escalates to SIGKILL when the child ignores SIGTERM (no close event)", () => {
+	it("escalates to SIGKILL when the child ignores SIGTERM (no close event)", async () => {
 		vi.useFakeTimers();
 		try {
 			const proc = new FakeProcess();
@@ -1331,11 +1403,16 @@ describe("spawnPiChild", () => {
 			const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
 			try {
 				controller.abort();
+				await vi.advanceTimersByTimeAsync(0);
 				expect(killSpy).toHaveBeenCalledWith(-4242, "SIGTERM");
 				// The signal was SENT but the process never exited — the fallback
 				// must still fire because it tracks close, not killed.
-				vi.advanceTimersByTime(5001);
+				await vi.advanceTimersByTimeAsync(5001);
 				expect(killSpy).toHaveBeenCalledWith(-4242, "SIGKILL");
+				proc.emit("close", null, "SIGKILL");
+				await vi.advanceTimersByTimeAsync(0);
+				await child.interrupt();
+				expect(vi.getTimerCount()).toBe(0);
 			} finally {
 				killSpy.mockRestore();
 			}
@@ -1344,7 +1421,52 @@ describe("spawnPiChild", () => {
 		}
 	});
 
-	it("keeps an interrupted run owned when the child errors before close", () => {
+	it("anchors later-born ephemeral descendants before TERM removes their leader", async () => {
+		vi.useFakeTimers();
+		const proc = new FakeProcess();
+		const controller = new AbortController();
+		let leader = true;
+		let empty = false;
+		let captures = 0;
+		const signals: string[] = [];
+		const operations: ProcessTreeOperations = {
+			captureStartTime: () => "leader-command",
+			identityMatches: () => leader ? "same" : "unknown",
+			captureTreeVerification: () => {
+				captures++;
+				return { members: (captures === 1 ? [4242] : [4242, 4343]).map((pid) => ({ pid, processStartTime: "birth" })) };
+			},
+			verificationMatches: (_identity, verification) => leader || verification.members.some((member) => member.pid === 4343) ? "same" : "unknown",
+			isTreeEmpty: () => empty,
+			signalTree: async (_identity, signal) => {
+				signals.push(signal);
+				if (signal === "SIGTERM") leader = false;
+				else empty = true;
+				return { ok: true, gone: false };
+			},
+			waitForTreeEmpty: async () => { throw new Error("unscoped wait used"); },
+		};
+		// SAFETY: the piped fake process and identity operations never inspect or signal OS PIDs.
+		const child = createPiChildSpawner(vi.fn(() => proc) as never, () => undefined, () => "/pi", () => undefined, operations)({
+			prompt: "p", cwd: "/tmp", inherited: {}, signal: controller.signal,
+		});
+		const events = collect(child.events);
+		controller.abort();
+		// WAIT-CLASS: clock-contract — establish TERM before delivering the leader's exit callback.
+		await vi.advanceTimersByTimeAsync(0);
+		proc.emit("exit", null, "SIGTERM");
+		expect(captures).toBe(2);
+		// WAIT-CLASS: clock-contract — surviving verified descendants still receive KILL after leader exit.
+		await vi.advanceTimersByTimeAsync(5000);
+		expect(signals).toEqual(["SIGTERM", "SIGKILL"]);
+		proc.emit("close", null, "SIGTERM");
+		await vi.advanceTimersByTimeAsync(0);
+		await child.interrupt();
+		expect(events.at(-1)).toMatchObject({ kind: "run-settled", outcome: { kind: "interrupted" } });
+		expect(vi.getTimerCount()).toBe(0);
+	});
+
+	it("keeps an interrupted run owned when the child errors before close", async () => {
 		vi.useFakeTimers();
 		const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
 		try {
@@ -1357,14 +1479,17 @@ describe("spawnPiChild", () => {
 
 			controller.abort();
 			proc.emit("error", new Error("termination failed"));
+			await vi.advanceTimersByTimeAsync(0);
 			expect(events.filter((event) => event.kind === "run-settled")).toEqual([]);
-			expect(vi.getTimerCount()).toBe(1);
+			// Scoped poll plus the cleanup adapter's overall deadline are both owned.
+			expect(vi.getTimerCount()).toBe(2);
 
-			vi.advanceTimersByTime(5001);
+			await vi.advanceTimersByTimeAsync(5001);
 			expect(killSpy).toHaveBeenCalledWith(-4242, "SIGKILL");
 			expect(events.filter((event) => event.kind === "run-settled")).toEqual([]);
 
 			proc.emit("close", null, "SIGKILL");
+			await vi.advanceTimersByTimeAsync(0);
 			expect(events.at(-1)).toEqual({ kind: "run-settled", outcome: { kind: "interrupted", partialText: undefined } });
 			expect(vi.getTimerCount()).toBe(0);
 		} finally {
@@ -1431,7 +1556,7 @@ describe("spawnPiChild", () => {
 		}
 	});
 
-	it("does not SIGKILL a child that exited after SIGTERM", () => {
+	it("does not SIGKILL a child that exited after SIGTERM", async () => {
 		vi.useFakeTimers();
 		try {
 			const proc = new FakeProcess();
@@ -1443,8 +1568,9 @@ describe("spawnPiChild", () => {
 			const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
 			try {
 				controller.abort();
+				await vi.advanceTimersByTimeAsync(0);
 				proc.emit("close", null);
-				vi.advanceTimersByTime(5001);
+				await vi.advanceTimersByTimeAsync(5001);
 				const kills = killSpy.mock.calls.filter(([pid]) => pid === -4242);
 				expect(kills).toEqual([[-4242, "SIGTERM"]]);
 			} finally {

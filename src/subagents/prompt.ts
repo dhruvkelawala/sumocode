@@ -27,7 +27,7 @@ function dirtyLabel(dirty: boolean | undefined): string {
 }
 
 export function formatCompletionManifestSummary(manifest: CompletionManifestEvidence): string {
-	if (!("baseRef" in manifest)) return `manifest unavailable · ${manifest.exit} · ${manifest.durationMs}ms`;
+	if (!("baseRef" in manifest)) return `manifest unavailable · ${manifest.exit} · ${manifest.durationMs}ms${manifest.cleanup ? " · cleanup unproven" : ""}`;
 	if (!manifest.branch) return `shared checkout · base ${shortRef(manifest.baseRef)} · +${manifest.commits} checkout commits · changed paths suppressed · checkout ${dirtyLabel(manifest.dirty)}`;
 	const files = `${manifest.changedPaths.length} ${manifest.changedPaths.length === 1 ? "file" : "files"} changed`;
 	return `branch: ${manifest.branch} · base ${shortRef(manifest.baseRef)} · +${manifest.commits} commits · ${files} · ${dirtyLabel(manifest.dirty)}`;

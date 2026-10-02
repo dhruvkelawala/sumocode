@@ -3,6 +3,29 @@
 Base: `0bbfc2a9` (#590 integration HEAD). Branch: `sumo/v08-591-manifest-cancel`.
 This is the manifest/settlement slice, not the #592 retained-child cancellation work.
 
+## Review repair P1: completion deadline
+
+The collector now reserves the last 500ms of its existing budget for termination
+and drain (less when module loading leaves less budget). Abort is synchronous;
+Git receipt joining is interruptible work, not an uninterruptible finalizer.
+The absolute deadline can therefore publish `{ exit, durationMs, cleanup:
+"unproven" }` if receipts are still outstanding. Bounded adapter cleanup continues
+independently, with no manager/supervisor references or publication authority.
+Late receipt/builder settlement cannot upgrade the published evidence, diagnose
+a stale builder failure, notify listeners or consume another generation.
+The optional cleanup marker survives validated retained reconstruction and appears
+in completion text; legacy artifacts without it keep their original shape.
+
+Tradeoff: evidence collection ends at 4.5s rather than spending all five seconds
+collecting evidence and then extending completion availability with teardown.
+A missing receipt is explicitly not proof of termination. No service, new
+runtime owner, completion ID, durable fence or performance sample is introduced.
+TestClock checks cover termination at 4.5s, proven drain at 4.75s, missing drain
+at 5s, and late receipts across deadline/disposal/replacement generations.
+
+The original implementation/evidence record below describes the reviewed base;
+its post-deadline drain tradeoff is superseded by this repair.
+
 ## Boundary and behavior
 
 `collectCompletionManifest()` remains a plain Promise API. Both the disposable

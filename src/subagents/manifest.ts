@@ -19,6 +19,8 @@ export interface CompletionManifest {
 export interface PartialCompletionManifest {
 	readonly exit: CompletionManifest["exit"];
 	readonly durationMs: number;
+	/** Snapshot at publication; late drain must never upgrade this claim. */
+	readonly cleanup?: "unproven";
 }
 
 export type CompletionManifestEvidence = CompletionManifest | PartialCompletionManifest;

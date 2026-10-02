@@ -86,6 +86,10 @@ export class RetainedResults {
 		if (!("exit" in m) || m.exit !== outcome.kind || !("durationMs" in m) || typeof m.durationMs !== "number"
 			|| !Number.isFinite(m.durationMs) || m.durationMs < 0) throw new Error("invalid retained manifest");
 		let manifest: CompletionManifestEvidence = { exit: outcome.kind, durationMs: m.durationMs };
+		if ("cleanup" in m) {
+			if (m.cleanup !== "unproven") throw new Error("invalid retained cleanup field");
+			manifest = { ...manifest, cleanup: m.cleanup };
+		}
 		if ("baseRef" in m) {
 			if (typeof m.baseRef !== "string" || !("changedPaths" in m) || !Array.isArray(m.changedPaths)
 				|| !m.changedPaths.every((path): path is string => typeof path === "string")

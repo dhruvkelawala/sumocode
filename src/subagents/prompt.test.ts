@@ -2,12 +2,18 @@ import { describe, expect, it } from "vitest";
 import { SUBAGENT_MAX_RUNNING } from "./domain.js";
 import {
 	buildSubagentPromptGuidelines,
+	formatCompletionManifest,
 	SUBAGENT_PROMPT_SNIPPET,
 	SUBAGENT_TOOL_DESCRIPTIONS,
 } from "./prompt.js";
 import { BUILT_IN_ROLES, loadRoles, type SubagentRole } from "./roles.js";
 
 const guidanceText = (roles: readonly SubagentRole[] = BUILT_IN_ROLES): string => buildSubagentPromptGuidelines(roles).join("\n");
+
+it("shows unproven cleanup without upgrading partial evidence", () => {
+	expect(formatCompletionManifest({ exit: "completed", durationMs: 5000, cleanup: "unproven" })).toBe("manifest unavailable · completed · 5000ms · cleanup unproven");
+	expect(formatCompletionManifest({ exit: "completed", durationMs: 5000 })).toBe("manifest unavailable · completed · 5000ms");
+});
 
 describe("subagent prompt guidance", () => {
 	it("distinguishes visible work from silent headless fan-out", () => {

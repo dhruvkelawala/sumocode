@@ -142,6 +142,19 @@ it("names every visible pane association refusal using content-free categories",
 	expect(JSON.stringify(results)).not.toContain("private adapter detail");
 });
 
+it.each([undefined, "unproven", "forged-proven"])("reconstructs only validated cleanup evidence: %s", (cleanup) => {
+	const root = realpathSync(mkdtempSync(join(tmpdir(), "retained-cleanup-")));
+	chmodSync(root, 0o700);
+	const artifacts = new RetainedResults(root);
+	artifacts.append({ kind: "run-started" });
+	artifacts.writeResult({ kind: "completed", finalText: "done" });
+	const manifest = { exit: "completed" as const, durationMs: 5000 };
+	artifacts.writeManifest(manifest);
+	writeFileSync(join(root, "manifest.json"), JSON.stringify({ schemaVersion: 1, manifest: { ...manifest, cleanup } }), { mode: 0o600 });
+	if (cleanup === "forged-proven") expect(() => RetainedResults.read(root)).toThrow("invalid retained cleanup");
+	else expect(RetainedResults.read(root)?.manifest).toEqual(cleanup ? { ...manifest, cleanup } : manifest);
+});
+
 it("discovers from disk, uses private controls once, and reads immutable completion evidence", async () => {
 	const f = await fixture();
 	const before = f.owner.record;

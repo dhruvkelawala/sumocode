@@ -94,7 +94,7 @@ function signalTree(child, signal) {
 
 function treeAlive(pid) {
 	try { process.kill(-pid, 0); return true; }
-	catch { return false; }
+	catch (error) { return error?.code !== "ESRCH"; }
 }
 
 async function waitForTreeExit(pid, timeoutMs) {
@@ -277,7 +277,7 @@ function markdown(report) {
 		const arm = report.arms[name];
 		return `| ${name} | \`${report.artifacts[name].sourceCommit.slice(0, 12)}\` | \`${report.artifacts[name].artifactSha256.slice(0, 12)}\` | ${arm.editorReady.medianMs} ± ${arm.editorReady.madMs} | ${arm.commandReady.medianMs} ± ${arm.commandReady.madMs} | ${arm.editorToCommandGap.medianMs} ± ${arm.editorToCommandGap.madMs} | ${arm.failures} |`;
 	};
-	return `# Native startup regression comparison\n\n- mode: ${report.mode ?? "comparison"} (smoke is never an adoption verdict)\n- samples per artifact: ${report.samplesPerArm}\n- fixture records: ${report.fixtureCount}\n- execution: alternating baseline/candidate artifacts under one isolated fixture environment\n- platform: ${report.machine.platform}-${report.machine.arch}\n\n| arm | source | artifact | editor-ready median ± MAD | command-ready median ± MAD | editor→command median ± MAD | failures |\n| --- | --- | --- | ---: | ---: | ---: | ---: |\n${row("baseline")}\n${row("candidate")}\n\nGate: **${report.gate.verdict.toUpperCase()}**${report.gate.failedChecks.length > 0 ? ` — ${report.gate.failedChecks.join(", ")}` : ""}.\n`;
+	return `# Native startup regression comparison\n\n- mode: ${report.mode ?? "comparison"} (smoke is never an adoption verdict)\n- samples per artifact: ${report.samplesPerArm}\n- fixture records: ${report.fixtureCount}\n- fixture state: ${report.fixture.retained ? `retained: ${report.fixture.reason} at ${report.fixture.path}` : "deleted after collection"}\n- execution: alternating baseline/candidate artifacts under one isolated fixture environment\n- platform: ${report.machine.platform}-${report.machine.arch}\n\n| arm | source | artifact | editor-ready median ± MAD | command-ready median ± MAD | editor→command median ± MAD | failures |\n| --- | --- | --- | ---: | ---: | ---: | ---: |\n${row("baseline")}\n${row("candidate")}\n\nGate: **${report.gate.verdict.toUpperCase()}**${report.gate.failedChecks.length > 0 ? ` — ${report.gate.failedChecks.join(", ")}` : ""}.\n`;
 }
 
 async function prepareReportDirectory(outDir, fixtureCount) {
@@ -325,8 +325,9 @@ export async function runNativeComparison(options, dependencies = {}) {
 	const agentDir = await mkdtemp(join(tmpdir(), "sumocode-native-regression-agent-"));
 	const raw = { baseline: [], candidate: [] };
 	const runSample = dependencies.runSample ?? runSampleProcess;
+	let retainedForLiveProcess = false;
 	try {
-		for (let index = 0; index < samplesPerArm; index += 1) {
+		collection: for (let index = 0; index < samplesPerArm; index += 1) {
 			const order = index % 2 === 0 ? ["baseline", "candidate"] : ["candidate", "baseline"];
 			for (const arm of order) {
 				const diagFile = join(outDir, `${String(index).padStart(2, "0")}-${arm}.jsonl`);
@@ -335,18 +336,28 @@ export async function runNativeComparison(options, dependencies = {}) {
 				try {
 					sample = await runSample({ arm, artifact, agentDir, diagFile, fixtureCount: options.fixtureCount, index });
 				} catch (error) {
+					// An exception (including failed final cleanup) leaves shutdown unproven.
+					retainedForLiveProcess = true;
 					sample = { index, ok: false, failure: "harness-error" };
 					console.error(`[native regression] sample=${index + 1}/${samplesPerArm} arm=${arm} harness error: ${error instanceof Error ? error.message : String(error)}`);
 				}
 				raw[arm].push(sample);
 				if (sample.ok) await rm(diagFile, { force: true });
 				console.error(`[native regression] sample=${index + 1}/${samplesPerArm} arm=${arm} ${sample.ok ? "ok" : sample.failure}`);
+				// Do not reset or delete state while an owned group may still be alive.
+				if (sample.failure === "shutdown-failed" || retainedForLiveProcess) {
+					retainedForLiveProcess = true;
+					break collection;
+				}
 			}
 		}
 		const report = {
 			schemaVersion: 1,
 			generatedAt: new Date().toISOString(),
 			fixtureCount: options.fixtureCount,
+			fixture: retainedForLiveProcess
+				? { retained: true, path: agentDir, reason: "unproven-shutdown" }
+				: { retained: false },
 			samplesPerArm,
 			mode: options.smokeSamples === undefined ? "comparison" : "smoke",
 			flags: [...FLAGS],
@@ -368,7 +379,8 @@ export async function runNativeComparison(options, dependencies = {}) {
 		console.error(`[native regression] artifacts: ${outDir}`);
 		return report;
 	} finally {
-		await rm(agentDir, { recursive: true, force: true });
+		if (retainedForLiveProcess) console.error(`[native regression] fixture retained: ${agentDir}`);
+		else await rm(agentDir, { recursive: true, force: true });
 	}
 }
 

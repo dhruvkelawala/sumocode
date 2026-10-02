@@ -84,6 +84,40 @@ describe("native artifact comparison", () => {
 		expect((await readdir(outDir)).filter((name) => name.endsWith(".jsonl"))).toEqual([]);
 	});
 
+	it.each(["shutdown-failed", "unreaped-exception", "unknown-exception"])("aborts on %s without resetting or deleting the owned fixture", async (failure) => {
+		const outDir = await mkdtemp(join(tmpdir(), "sumocode-native-shutdown-failure-"));
+		roots.push(outDir);
+		const calls = [];
+		const report = await runNativeComparison({ baselineDir: "/a", candidateDir: "/b", fixtureCount: 0, outDir }, {
+			readBaselineIdentity: async () => ({ sourceCommit: "a".repeat(40) }),
+			readArtifact: async (path) => ({
+				artifactDir: path, sourceCommit: path === "/a" ? "a".repeat(40) : "b".repeat(40),
+				sourceClean: true, artifactSha256: path === "/a" ? "1".repeat(64) : "2".repeat(64),
+			}),
+			machineMetadata: async () => ({ platform: "test", arch: "test" }),
+			runSample: async ({ arm, agentDir, diagFile, index }) => {
+				calls.push({ arm, agentDir });
+				roots.push(agentDir);
+				await writeFile(join(agentDir, "owned-state"), "do not mutate");
+				await writeFile(diagFile, "shutdown evidence\n");
+				if (failure === "unreaped-exception") throw new Error("native sample process group survived shutdown");
+				if (failure === "unknown-exception") throw new Error("unexpected sample failure");
+				return { index, ok: false, failure: "shutdown-failed" };
+			},
+		});
+		const expectedFailure = failure === "shutdown-failed" ? "shutdown-failed" : "harness-error";
+		expect(calls).toHaveLength(1);
+		expect(calls[0].arm).toBe("baseline");
+		expect(await readFile(join(calls[0].agentDir, "owned-state"), "utf8")).toBe("do not mutate");
+		expect(await readFile(join(outDir, "00-baseline.jsonl"), "utf8")).toBe("shutdown evidence\n");
+		expect(report.arms.baseline.samples).toEqual([{ index: 0, ok: false, failure: expectedFailure }]);
+		expect(report.arms.candidate.samples).toEqual([]);
+		expect(report.gate).toMatchObject({ verdict: "failed", failedChecks: ["collection"] });
+		expect(report.fixture).toEqual({ retained: true, path: calls[0].agentDir, reason: "unproven-shutdown" });
+		expect(JSON.parse(await readFile(join(outDir, "results.json"), "utf8"))).toMatchObject({ fixture: report.fixture, gate: report.gate });
+		expect(await readFile(join(outDir, "report.md"), "utf8")).toContain("retained: unproven-shutdown");
+	});
+
 	it("retains failed-sample diagnostics and reports harness errors visibly", async () => {
 		const outDir = await mkdtemp(join(tmpdir(), "sumocode-native-failed-samples-"));
 		roots.push(outDir);
@@ -95,7 +129,8 @@ describe("native artifact comparison", () => {
 				sourceClean: true,
 				artifactSha256: path === "/a" ? "1".repeat(64) : "2".repeat(64),
 			}),
-			runSample: async ({ diagFile }) => {
+			runSample: async ({ diagFile, agentDir }) => {
+				roots.push(agentDir);
 				await writeFile(diagFile, "failure evidence\n");
 				throw new Error("spawn failed");
 			},

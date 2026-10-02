@@ -19,6 +19,7 @@ export interface SelectionControllerOptions {
 	readonly readBuffer?: () => CellBuffer | undefined;
 	readonly emitClipboard?: (sequence: string, text: string) => void;
 	readonly onCopied?: (text: string) => void;
+	readonly onLinkActivated?: (url: string) => void;
 	readonly onSelectionChanged?: () => void;
 }
 
@@ -166,6 +167,7 @@ export class SelectionController {
 	private anchor: SelectionPoint | undefined;
 	private focus: SelectionPoint | undefined;
 	private dragging = false;
+	private pressedLink: string | undefined;
 	private revision = 0;
 
 	public constructor(private readonly options: SelectionControllerOptions = {}) {}
@@ -188,6 +190,7 @@ export class SelectionController {
 		this.anchor = undefined;
 		this.focus = undefined;
 		this.dragging = false;
+		this.pressedLink = undefined;
 		this.notifyChanged();
 		return true;
 	}
@@ -205,7 +208,11 @@ export class SelectionController {
 			if (!this.dragging || !this.anchor) return false;
 			return this.handleMouseEvent({ ...event, type: "drag", button: PRIMARY_BUTTON }, buffer);
 		}
+		// Any new press cancels a pending link, even a rejected button/target.
+		// Only a primary press replaces selection; a button chord can still copy.
+		if (event.type === "down") this.pressedLink = undefined;
 		if (event.button !== undefined && event.button !== PRIMARY_BUTTON) return false;
+		if (event.type === "down") this.dragging = false;
 
 		const point = normalizePoint({ row: event.row, col: event.col }, buffer);
 		if (event.type === "down") {
@@ -218,6 +225,7 @@ export class SelectionController {
 			this.anchor = point;
 			this.focus = point;
 			this.dragging = true;
+			this.pressedLink = point.row === event.row && point.col === event.col ? buffer?.getCell(point.row, point.col).hyperlink : undefined;
 			logDiagnostic("selection_start", { semantic, row: point.row, col: point.col });
 			this.notifyChanged();
 			return true;
@@ -226,6 +234,7 @@ export class SelectionController {
 		if (!this.dragging || !this.anchor) return false;
 
 		if (event.type === "drag") {
+			if (!samePoint(point, this.anchor)) this.pressedLink = undefined;
 			const snapped = snapFocusToSelectableRow(point, this.anchor, buffer);
 			if (snapped.snapped) logDiagnostic("selection_focus_snap", { phase: "drag", fromRow: snapped.fromRow, toRow: snapped.point.row, col: snapped.point.col });
 			this.focus = snapped.point;
@@ -239,7 +248,12 @@ export class SelectionController {
 		this.dragging = false;
 		const selected = this.hasSelection();
 		if (!selected) {
+			// Mouse reporting consumes native terminal clicks. Activate only an
+			// unmoved press/release on the same, still-visible link; a drag is copy.
+			const url = samePoint(point, this.anchor) && point.row === event.row && point.col === event.col
+				&& buffer?.getCell(point.row, point.col).hyperlink === this.pressedLink ? this.pressedLink : undefined;
 			this.clear();
+			if (url) this.options.onLinkActivated?.(url);
 			return true;
 		}
 		this.notifyChanged();

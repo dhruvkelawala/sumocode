@@ -32,6 +32,28 @@ describe("native artifact comparison", () => {
 		expect(() => nativeCompareOptions(["--baseline", "/a", "--candidate", "/b", "--samples", "5"])).toThrow("unknown option");
 	});
 
+	it("labels tiny smoke collections as non-certifying", async () => {
+		expect(nativeCompareOptions(["--baseline", "/a", "--candidate", "/b", "--smoke", "1"]).smokeSamples).toBe(1);
+		expect(() => nativeCompareOptions(["--baseline", "/a", "--candidate", "/b", "--smoke", "3"])).toThrow("at most 2");
+		const outDir = await mkdtemp(join(tmpdir(), "sumocode-native-smoke-"));
+		roots.push(outDir);
+		const result = await runNativeComparison({ baselineDir: "/a", candidateDir: "/b", fixtureCount: 0, outDir, smokeSamples: 1 }, {
+			readBaselineIdentity: async () => ({ sourceCommit: "a".repeat(40) }),
+			readArtifact: async (path) => ({ artifactDir: path, sourceCommit: path === "/a" ? "a".repeat(40) : "b".repeat(40), sourceClean: true, artifactSha256: path === "/a" ? "1".repeat(64) : "2".repeat(64) }),
+			machineMetadata: async () => ({ platform: "test", arch: "test" }),
+			runSample: async ({ index }) => ({ index, ok: true, editorReadyMs: 100, commandReadyMs: 200, editorToCommandGapMs: 100 }),
+		});
+		expect(result).toMatchObject({ mode: "smoke", samplesPerArm: 1, gate: { verdict: "smoke-only" } });
+		expect(evaluateNativeGate(result).failedChecks).toContain("collection");
+	});
+
+	it("rejects stale diagnostics rather than mixing separate runs", async () => {
+		const outDir = await mkdtemp(join(tmpdir(), "sumocode-native-stale-"));
+		roots.push(outDir);
+		await writeFile(join(outDir, "00-baseline.jsonl"), "old evidence");
+		await expect(runNativeComparison({ baselineDir: "/a", candidateDir: "/b", fixtureCount: 0, outDir })).rejects.toThrow("stale sample diagnostics");
+	});
+
 	it("records exact source/artifact identities and alternating raw timings", async () => {
 		const outDir = await mkdtemp(join(tmpdir(), "sumocode-native-compare-report-"));
 		roots.push(outDir);

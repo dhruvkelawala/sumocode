@@ -7,17 +7,20 @@ import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { build } from "esbuild";
 import { readNativeArtifactIdentity } from "./lib/native-artifact.mjs";
+import { assertNoProductionDependencyLeakage, bundleJavaScriptText } from "./lib/production-boundaries.mjs";
 import { measureHostImport } from "./perf-startup.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const DEFAULT_BASELINE = join(ROOT, "docs/perf/adoption-baseline.json");
 const SAMPLES = 15;
+const MEASUREMENTS = ["source-host-import-ms", ...["source-classic", "source-rpc", "native-classic", "native-rpc"]
+	.flatMap((name) => [`${name}-extension-bytes`, `${name}-extension-eval-ms`])];
 const EVAL_START = "sumocode_extension_eval_start";
 const EVAL_END = "sumocode_extension_eval_end";
 const execFileAsync = promisify(execFile);
 
 function usage() {
-	return `Usage: node scripts/perf-adoption-budget.mjs --native <dir> [options]\n\nOptions:\n  --native <dir>      native archive built from the current clean source commit\n  --out <dir>         new report directory (required)\n  -h, --help          show this help\n\nThe command always loads and never rewrites the committed baseline.\n`;
+	return `Usage: node scripts/perf-adoption-budget.mjs --native <dir> [options]\n\nOptions:\n  --native <dir>      native archive built from the current clean source commit\n  --out <dir>         new report directory (required)\n  --collect-only      record unreviewed observations; never certify or update budgets\n  -h, --help          show this help\n\nThe command never rewrites the committed baseline.\n`;
 }
 
 export function adoptionBudgetOptions(argv) {
@@ -25,6 +28,7 @@ export function adoptionBudgetOptions(argv) {
 	for (let index = argv[0] === "--" ? 1 : 0; index < argv.length; index += 1) {
 		const arg = argv[index];
 		if (arg === "-h" || arg === "--help") return { ...options, help: true };
+		if (arg === "--collect-only") { options.collectOnly = true; continue; }
 		const value = argv[index + 1];
 		if (["--native", "--out"].includes(arg) && value === undefined) throw new Error(`${arg} requires a value`);
 		switch (arg) {
@@ -66,29 +70,29 @@ function sizeMeasurement(value) {
 	return { kind: "size", value };
 }
 
+function measurementComplete(name, observed) {
+	if (name.endsWith("-bytes")) return observed?.kind === "size" && Number.isFinite(observed.value);
+	return observed?.kind === "timing" && Array.isArray(observed.samples) && observed.samples.length === SAMPLES
+		&& observed.samples.every(Number.isFinite) && observed.failures === 0 && Number.isFinite(observed.medianMs);
+}
+
 export function evaluateAdoptionBudget(report, policy) {
 	const failedChecks = [];
+	if (policy.status !== "reviewed") failedChecks.push("baseline:unreviewed");
 	const measurements = report.measurements ?? {};
-	for (const [name, budget] of Object.entries(policy.budgets ?? {})) {
+	for (const name of MEASUREMENTS) {
+		const budget = policy.budgets?.[name];
 		const observed = measurements[name];
 		if (!Number.isFinite(budget?.max)) {
 			failedChecks.push(`${name}:policy`);
 			continue;
 		}
-		if (!observed) {
+		if (!measurementComplete(name, observed)) {
 			failedChecks.push(`${name}:collection`);
 			continue;
 		}
-		if (observed.kind === "timing") {
-			if (observed.samples.length !== SAMPLES || observed.failures !== 0 || !Number.isFinite(observed.medianMs)) {
-				failedChecks.push(`${name}:collection`);
-				continue;
-			}
-			if (observed.medianMs > budget.max) failedChecks.push(`${name}:budget`);
-		} else if (observed.kind === "size") {
-			if (!Number.isFinite(observed.value)) failedChecks.push(`${name}:collection`);
-			else if (observed.value > budget.max) failedChecks.push(`${name}:budget`);
-		} else failedChecks.push(`${name}:collection`);
+		const value = observed.kind === "timing" ? observed.medianMs : observed.value;
+		if (value > budget.max) failedChecks.push(`${name}:budget`);
 	}
 	for (const name of Object.keys(measurements)) {
 		if (!Object.hasOwn(policy.budgets ?? {}, name)) failedChecks.push(`${name}:policy`);
@@ -116,8 +120,10 @@ async function buildSourceBundle(entryPoint) {
 		target: "node22",
 		external: ["@earendil-works/*", "typebox"],
 		write: false,
+		metafile: true,
 		logLevel: "silent",
 	});
+	assertNoProductionDependencyLeakage(result.metafile, `adoption source bundle ${entryPoint}`, bundleJavaScriptText(result.outputFiles));
 	return result.outputFiles[0].text;
 }
 
@@ -258,7 +264,9 @@ async function defaultCollectMeasurements(nativeArtifact) {
 			"native-rpc": { source: await readFile(nativeRpcPath, "utf8"), command: join(nativeArtifact.artifactDir, "bin/sumocode-pi"), root: nativeArtifact.artifactDir, native: true },
 		};
 		const measurements = {};
-		const hostImport = await measureHostImport(SAMPLES);
+		const hostAgent = join(workDir, "host-import");
+		await Promise.all(["home", "state", "config", "tmp"].map((name) => privateDirectory(join(hostAgent, name))));
+		const hostImport = await measureHostImport(SAMPLES, evaluationEnvironment(hostAgent, join(hostAgent, "startup.jsonl"), ROOT, false));
 		measurements["source-host-import-ms"] = timingMeasurement(hostImport.samples.map((sample) => sample.ok === false
 			? { ok: false, failure: sample.failure }
 			: { ok: true, durationMs: sample.durationMs }));
@@ -290,7 +298,7 @@ function markdown(report, policy) {
 		const observed = measurement.kind === "timing"
 			? (measurement.medianMs === null ? "failed" : `${measurement.medianMs}ms`)
 			: `${measurement.value} bytes`;
-		const budget = policy.budgets[name];
+		const budget = policy.budgets?.[name];
 		return `| ${name} | ${budget?.baseline ?? "—"} | ${budget?.max ?? "—"} | ${observed} |`;
 	});
 	return `# Effect adoption performance budget\n\n- source: \`${report.source.sourceCommit}\` (clean: ${report.source.sourceClean})\n- native artifact: \`${report.nativeArtifact.artifactSha256}\` from \`${report.nativeArtifact.sourceCommit}\`\n- samples per timing measurement: ${SAMPLES}\n\n| measurement | baseline | reviewed max | observed |\n| --- | ---: | ---: | ---: |\n${rows.join("\n")}\n\nGate: **${report.gate.verdict.toUpperCase()}**${report.gate.failedChecks.length ? ` — ${report.gate.failedChecks.join(", ")}` : ""}.\n`;
@@ -304,12 +312,15 @@ export async function runAdoptionBudget(options, dependencies = {}) {
 		(dependencies.readArtifact ?? readNativeArtifactIdentity)(options.nativeDir),
 	]);
 	if (policy.schemaVersion !== 1 || policy.baseline?.samples !== SAMPLES) throw new Error("adoption baseline policy is invalid");
+	if (!options.collectOnly && policy.status !== "reviewed") throw new Error("adoption baseline is pending quiet-machine collection and explicit review; use --collect-only for evidence");
 	if (!source.sourceClean) throw new Error("adoption budget requires a clean source checkout");
 	if (nativeArtifact.sourceClean !== true) throw new Error("adoption budget requires a clean native artifact");
 	if (source.sourceCommit !== nativeArtifact.sourceCommit) throw new Error("source checkout and native artifact commits differ");
 	const machine = await (dependencies.machineMetadata ?? defaultMachineMetadata)();
-	for (const key of ["platform", "arch", "node", "bun", "cpu"]) {
-		if (machine[key] !== policy.baseline.machine?.[key]) throw new Error(`adoption budget machine mismatch: ${key}`);
+	if (!options.collectOnly) {
+		for (const key of ["platform", "arch", "node", "bun", "cpu"]) {
+			if (machine[key] !== policy.baseline.machine?.[key]) throw new Error(`adoption budget machine mismatch: ${key}`);
+		}
 	}
 	const measurements = await (dependencies.collectMeasurements ?? defaultCollectMeasurements)(nativeArtifact);
 	const report = {
@@ -320,7 +331,10 @@ export async function runAdoptionBudget(options, dependencies = {}) {
 		machine,
 		measurements,
 	};
-	report.gate = evaluateAdoptionBudget(report, policy);
+	report.gate = evaluateAdoptionBudget(report, options.collectOnly ? { ...policy, status: "pending" } : policy);
+	if (options.collectOnly && MEASUREMENTS.every((name) => measurementComplete(name, measurements[name]))) {
+		report.gate = { verdict: "unreviewed", failedChecks: ["baseline:unreviewed"] };
+	}
 	await writeFile(join(options.outDir, "results.json"), `${JSON.stringify(report, null, 2)}\n`, { mode: 0o600, flag: "wx" });
 	await writeFile(join(options.outDir, "report.md"), markdown(report, policy), { mode: 0o600, flag: "wx" });
 	return report;
@@ -331,7 +345,7 @@ export async function main(argv = process.argv.slice(2)) {
 	if (options.help) { console.log(usage()); return undefined; }
 	const report = await runAdoptionBudget(options);
 	console.log((await readFile(join(options.outDir, "report.md"), "utf8")));
-	if (report.gate.verdict !== "passed") throw new Error(`adoption performance budget failed: ${report.gate.failedChecks.join(", ")}`);
+	if (report.gate.verdict !== "passed" && !(options.collectOnly && report.gate.verdict === "unreviewed")) throw new Error(`adoption performance budget failed: ${report.gate.failedChecks.join(", ")}`);
 	return report;
 }
 

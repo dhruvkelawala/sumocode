@@ -19,7 +19,7 @@ const EDIT_SENTINEL = "native-perf-edit-sentinel";
 const execFileAsync = promisify(execFile);
 
 function usage() {
-	return `Usage: node scripts/perf-native-compare.mjs --baseline <archive> --candidate <archive> [options]\n\nOptions:\n  --baseline <dir>       clean native archive used as the fixed baseline\n  --candidate <dir>      clean native archive being evaluated\n  --fixture-count <n>    settled terminal records (default: 0)\n  --out <dir>            new report files (default: private temporary directory)\n  -h, --help             show this help\n\nEvery comparison collects exactly ${DEFAULT_SAMPLES} samples per artifact.\n`;
+	return `Usage: node scripts/perf-native-compare.mjs --baseline <archive> --candidate <archive> [options]\n\nOptions:\n  --baseline <dir>       clean native archive used as the fixed baseline\n  --candidate <dir>      clean native archive being evaluated\n  --fixture-count <n>    settled terminal records (default: 0)\n  --out <dir>            new report files (default: private temporary directory)\n  --smoke <n>           1–2 samples per arm; tooling check, never an adoption verdict\n  -h, --help             show this help\n\nEvery certifying comparison collects exactly ${DEFAULT_SAMPLES} samples per artifact.\n`;
 }
 
 function positiveInteger(value, flag) {
@@ -35,12 +35,17 @@ export function nativeCompareOptions(argv) {
 		const arg = argv[index];
 		if (arg === "-h" || arg === "--help") return { ...options, help: true };
 		const value = argv[index + 1];
-		if (["--baseline", "--candidate", "--fixture-count", "--out"].includes(arg) && value === undefined) throw new Error(`${arg} requires a value`);
+		if (["--baseline", "--candidate", "--fixture-count", "--out", "--smoke"].includes(arg) && (value === undefined || value.startsWith("--"))) throw new Error(`${arg} requires a value`);
 		switch (arg) {
 			case "--baseline": options.baselineDir = resolve(value); index += 1; break;
 			case "--candidate": options.candidateDir = resolve(value); index += 1; break;
 			case "--fixture-count": options.fixtureCount = value === "0" ? 0 : positiveInteger(value, arg); index += 1; break;
 			case "--out": options.outDir = resolve(value); index += 1; break;
+			case "--smoke":
+				options.smokeSamples = positiveInteger(value, arg);
+				if (options.smokeSamples > 2) throw new Error("--smoke allows at most 2 samples per arm");
+				index += 1;
+				break;
 			default: throw new Error(`unknown option: ${arg}`);
 		}
 	}
@@ -133,63 +138,72 @@ async function runSampleProcess({ artifact, agentDir, diagFile, fixtureCount, in
 	});
 	child.onExit(() => { exited = true; });
 
-	const deadline = Date.now() + SAMPLE_TIMEOUT_MS;
-	let events = [];
-	while (!exited && Date.now() < deadline) {
-		events = await readEvents(diagFile);
-		if (REQUIRED_EVENTS.every((name) => events.some((event) => event.event === name))) break;
-		await new Promise((resolveDelay) => setTimeout(resolveDelay, 20));
-	}
-	const byName = new Map(events.map((event) => [event.event, event]));
-	const missingEvents = REQUIRED_EVENTS.filter((name) => !byName.has(name));
-	let editorResponsive = false;
-	if (!exited && missingEvents.length === 0) {
-		child.write(EDIT_SENTINEL);
-		const editDeadline = Date.now() + 3_000;
-		while (!exited && Date.now() < editDeadline) {
-			if (await editorProbe(output)) { editorResponsive = true; break; }
+	try {
+		const deadline = Date.now() + SAMPLE_TIMEOUT_MS;
+		let events = [];
+		while (!exited && Date.now() < deadline) {
+			events = await readEvents(diagFile);
+			if (REQUIRED_EVENTS.every((name) => events.some((event) => event.event === name))) break;
 			await new Promise((resolveDelay) => setTimeout(resolveDelay, 20));
 		}
-	}
-	const exitedBeforeShutdown = exited;
-	const aliveBeforeShutdown = treeAlive(child.pid);
-	if (aliveBeforeShutdown) signalTree(child, "SIGINT");
-	await waitForTreeExit(child.pid, 750);
-	if (treeAlive(child.pid)) signalTree(child, "SIGTERM");
-	await waitForTreeExit(child.pid, 250);
-	if (treeAlive(child.pid)) signalTree(child, "SIGKILL");
-	await waitForTreeExit(child.pid, 250);
-
-	const terminalReady = byName.get("terminal_index_ready");
-	const editorTs = byName.get("editor_ready")?.ts;
-	const commandTs = byName.get("command_ready")?.ts;
-	const fixtureMatches = terminalReady?.snapshotCount === fixtureCount;
-	const ok = aliveBeforeShutdown && !exitedBeforeShutdown && !treeAlive(child.pid)
-		&& missingEvents.length === 0 && fixtureMatches && editorResponsive
-		&& Number.isFinite(editorTs) && Number.isFinite(commandTs) && commandTs >= editorTs;
-	return ok
-		? {
-				index, ok: true,
-				editorReadyMs: editorTs - startedAt,
-				commandReadyMs: commandTs - startedAt,
-				editorToCommandGapMs: commandTs - editorTs,
-				terminalIndexMs: terminalReady.durationMs,
+		const byName = new Map(events.map((event) => [event.event, event]));
+		const missingEvents = REQUIRED_EVENTS.filter((name) => !byName.has(name));
+		let editorResponsive = false;
+		if (!exited && missingEvents.length === 0) {
+			child.write(EDIT_SENTINEL);
+			const editDeadline = Date.now() + 3_000;
+			while (!exited && Date.now() < editDeadline) {
+				if (await editorProbe(output)) { editorResponsive = true; break; }
+				await new Promise((resolveDelay) => setTimeout(resolveDelay, 20));
 			}
-		: {
-				index,
-				ok: false,
-				failure: sampleFailure({
-					childPid: child.pid,
-					exitedBeforeShutdown,
-					aliveBeforeShutdown,
-					missingEvents,
-					fixtureMatches,
-					snapshotCount: terminalReady?.snapshotCount,
-					editorResponsive,
-					editorTs,
-					commandTs,
-				}),
-			};
+		}
+		const exitedBeforeShutdown = exited;
+		const aliveBeforeShutdown = treeAlive(child.pid);
+		if (aliveBeforeShutdown) signalTree(child, "SIGINT");
+		await waitForTreeExit(child.pid, 750);
+		if (treeAlive(child.pid)) signalTree(child, "SIGTERM");
+		await waitForTreeExit(child.pid, 250);
+		if (treeAlive(child.pid)) signalTree(child, "SIGKILL");
+		await waitForTreeExit(child.pid, 250);
+
+		const terminalReady = byName.get("terminal_index_ready");
+		const editorTs = byName.get("editor_ready")?.ts;
+		const commandTs = byName.get("command_ready")?.ts;
+		const fixtureMatches = terminalReady?.snapshotCount === fixtureCount;
+		const ok = aliveBeforeShutdown && !exitedBeforeShutdown && !treeAlive(child.pid)
+			&& missingEvents.length === 0 && fixtureMatches && editorResponsive
+			&& Number.isFinite(editorTs) && Number.isFinite(commandTs) && commandTs >= editorTs;
+		return ok
+			? {
+					index, ok: true,
+					editorReadyMs: editorTs - startedAt,
+					commandReadyMs: commandTs - startedAt,
+					editorToCommandGapMs: commandTs - editorTs,
+					terminalIndexMs: terminalReady.durationMs,
+				}
+			: {
+					index,
+					ok: false,
+					failure: sampleFailure({
+						childPid: child.pid,
+						exitedBeforeShutdown,
+						aliveBeforeShutdown,
+						missingEvents,
+						fixtureMatches,
+						snapshotCount: terminalReady?.snapshotCount,
+						editorResponsive,
+						editorTs,
+						commandTs,
+					}),
+				};
+	} finally {
+		if (treeAlive(child.pid)) signalTree(child, "SIGTERM");
+		await waitForTreeExit(child.pid, 250);
+		if (treeAlive(child.pid)) signalTree(child, "SIGKILL");
+		await waitForTreeExit(child.pid, 250);
+		// oxlint-disable-next-line eslint/no-unsafe-finally -- an unreaped owned process invalidates any collected timing
+		if (treeAlive(child.pid)) throw new Error("native sample process group survived shutdown");
+	}
 }
 
 function round(value) {
@@ -263,13 +277,14 @@ function markdown(report) {
 		const arm = report.arms[name];
 		return `| ${name} | \`${report.artifacts[name].sourceCommit.slice(0, 12)}\` | \`${report.artifacts[name].artifactSha256.slice(0, 12)}\` | ${arm.editorReady.medianMs} ± ${arm.editorReady.madMs} | ${arm.commandReady.medianMs} ± ${arm.commandReady.madMs} | ${arm.editorToCommandGap.medianMs} ± ${arm.editorToCommandGap.madMs} | ${arm.failures} |`;
 	};
-	return `# Native startup regression comparison\n\n- samples per artifact: ${report.samplesPerArm}\n- fixture records: ${report.fixtureCount}\n- execution: alternating baseline/candidate artifacts under one isolated fixture environment\n- platform: ${report.machine.platform}-${report.machine.arch}\n\n| arm | source | artifact | editor-ready median ± MAD | command-ready median ± MAD | editor→command median ± MAD | failures |\n| --- | --- | --- | ---: | ---: | ---: | ---: |\n${row("baseline")}\n${row("candidate")}\n\nGate: **${report.gate.verdict.toUpperCase()}**${report.gate.failedChecks.length > 0 ? ` — ${report.gate.failedChecks.join(", ")}` : ""}.\n`;
+	return `# Native startup regression comparison\n\n- mode: ${report.mode ?? "comparison"} (smoke is never an adoption verdict)\n- samples per artifact: ${report.samplesPerArm}\n- fixture records: ${report.fixtureCount}\n- execution: alternating baseline/candidate artifacts under one isolated fixture environment\n- platform: ${report.machine.platform}-${report.machine.arch}\n\n| arm | source | artifact | editor-ready median ± MAD | command-ready median ± MAD | editor→command median ± MAD | failures |\n| --- | --- | --- | ---: | ---: | ---: | ---: |\n${row("baseline")}\n${row("candidate")}\n\nGate: **${report.gate.verdict.toUpperCase()}**${report.gate.failedChecks.length > 0 ? ` — ${report.gate.failedChecks.join(", ")}` : ""}.\n`;
 }
 
 async function prepareReportDirectory(outDir, fixtureCount) {
 	const target = outDir ?? await mkdtemp(join(tmpdir(), `sumocode-native-regression-${fixtureCount}-`));
 	await mkdir(target, { recursive: true, mode: 0o700 });
 	const entries = new Set(await readdir(target));
+	if ([...entries].some((name) => name.endsWith(".jsonl"))) throw new Error("--out contains stale sample diagnostics; use a new directory");
 	for (const name of ["results.json", "report.md"]) {
 		if (entries.has(name)) throw new Error(`--out already contains ${name}; refusing to overwrite it`);
 	}
@@ -304,12 +319,14 @@ export async function runNativeComparison(options, dependencies = {}) {
 	if (baselineArtifact.artifactSha256 === candidateArtifact.artifactSha256) {
 		throw new Error("comparison requires two distinct native artifacts");
 	}
+	const samplesPerArm = options.smokeSamples ?? DEFAULT_SAMPLES;
+	if (options.smokeSamples !== undefined && ![1, 2].includes(options.smokeSamples)) throw new Error("invalid smoke sample count");
 	const machine = await (dependencies.machineMetadata ?? defaultMachineMetadata)();
 	const agentDir = await mkdtemp(join(tmpdir(), "sumocode-native-regression-agent-"));
 	const raw = { baseline: [], candidate: [] };
 	const runSample = dependencies.runSample ?? runSampleProcess;
 	try {
-		for (let index = 0; index < DEFAULT_SAMPLES; index += 1) {
+		for (let index = 0; index < samplesPerArm; index += 1) {
 			const order = index % 2 === 0 ? ["baseline", "candidate"] : ["candidate", "baseline"];
 			for (const arm of order) {
 				const diagFile = join(outDir, `${String(index).padStart(2, "0")}-${arm}.jsonl`);
@@ -319,18 +336,19 @@ export async function runNativeComparison(options, dependencies = {}) {
 					sample = await runSample({ arm, artifact, agentDir, diagFile, fixtureCount: options.fixtureCount, index });
 				} catch (error) {
 					sample = { index, ok: false, failure: "harness-error" };
-					console.error(`[native regression] sample=${index + 1}/${DEFAULT_SAMPLES} arm=${arm} harness error: ${error instanceof Error ? error.message : String(error)}`);
+					console.error(`[native regression] sample=${index + 1}/${samplesPerArm} arm=${arm} harness error: ${error instanceof Error ? error.message : String(error)}`);
 				}
 				raw[arm].push(sample);
 				if (sample.ok) await rm(diagFile, { force: true });
-				console.error(`[native regression] sample=${index + 1}/${DEFAULT_SAMPLES} arm=${arm} ${sample.ok ? "ok" : sample.failure}`);
+				console.error(`[native regression] sample=${index + 1}/${samplesPerArm} arm=${arm} ${sample.ok ? "ok" : sample.failure}`);
 			}
 		}
 		const report = {
 			schemaVersion: 1,
 			generatedAt: new Date().toISOString(),
 			fixtureCount: options.fixtureCount,
-			samplesPerArm: DEFAULT_SAMPLES,
+			samplesPerArm,
+			mode: options.smokeSamples === undefined ? "comparison" : "smoke",
 			flags: [...FLAGS],
 			artifacts: { baseline: reportIdentity(baselineArtifact), candidate: reportIdentity(candidateArtifact) },
 			machine,
@@ -340,6 +358,11 @@ export async function runNativeComparison(options, dependencies = {}) {
 			samplesPerArm: report.samplesPerArm,
 			arms: { baseline: { samples: raw.baseline }, candidate: { samples: raw.candidate } },
 		});
+		if (report.mode === "smoke") {
+			const complete = [raw.baseline, raw.candidate].every((samples) => samples.length === samplesPerArm
+				&& samples.every((sample) => sample.ok && [sample.editorReadyMs, sample.commandReadyMs, sample.editorToCommandGapMs].every(Number.isFinite)));
+			report.gate = { verdict: complete ? "smoke-only" : "failed", failedChecks: complete ? [] : ["collection"] };
+		}
 		await writeFile(join(outDir, "results.json"), `${JSON.stringify(report, null, 2)}\n`, { mode: 0o600, flag: "wx" });
 		await writeFile(join(outDir, "report.md"), markdown(report), { mode: 0o600, flag: "wx" });
 		console.error(`[native regression] artifacts: ${outDir}`);
@@ -354,7 +377,7 @@ export async function main(argv = process.argv.slice(2)) {
 	if (options.help) { console.log(usage()); return undefined; }
 	const report = await runNativeComparison(options);
 	console.log(markdown(report));
-	if (report.gate.verdict !== "passed") throw new Error(`native startup regression: ${report.gate.failedChecks.join(", ")}`);
+	if (!["passed", "smoke-only"].includes(report.gate.verdict)) throw new Error(`native startup regression: ${report.gate.failedChecks.join(", ")}`);
 	return report;
 }
 

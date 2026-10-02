@@ -333,17 +333,17 @@ Mitigations that are genuinely available: `"sideEffects": []` (`effect/package.j
 
 ### 3.4 The gate
 
-Issue #589 replaced the old Node-bundle-versus-native improvement benchmark with the reproducible adoption gate documented in [`docs/perf/adoption-baseline.md`](../../perf/adoption-baseline.md):
+Issue #589 adds the native-vs-native adoption tooling documented in [`docs/perf/adoption-baseline.md`](../../perf/adoption-baseline.md):
 
 - `scripts/perf-native-compare.mjs` requires two checksum-verified native archives. The baseline archive must match the pinned clean source commit, and each run records both archives' exact checksum identities; the harness alternates exactly 15 samples per artifact under one isolated fixture/environment.
 - `evaluateNativeGate` fails if any sample is missing or incomplete, if candidate `editor_ready` exceeds baseline median + baseline MAD, if `command_ready` rises at all, or if `editorToCommandGapMs` widens.
-- `scripts/perf-adoption-budget.mjs` gates source `host-import` plus classic/RPC extension bundle bytes and in-Pi-child evaluation for both source-built and native-distributed bundles.
+- `scripts/perf-adoption-budget.mjs` gates source `host-import` plus classic/RPC extension bundle bytes and in-Pi-child evaluation for both source-built and native-distributed bundles. The v0.8 record is pending quiet-machine collection and explicit budget review; `--collect-only` records unreviewed evidence, never a passing gate. PR #597's old numbers are not applicable after memory removal.
 - `scripts/perf-startup-compare.mjs` remains the directional source-arm gate; its verdict must not be `REGRESSED`. `scripts/perf-startup.mjs` remains report-only.
 
 **Effect-campaign gate, per applicable slice:**
 
 1. Build the candidate native archive from a clean commit and compare it with the pinned pre-adoption archive using `pnpm perf:native:compare -- --baseline <archive> --candidate <archive> --out <dir>`.
-2. On a machine matching the recorded platform, architecture, Node, Bun, and CPU, run `pnpm perf:adoption -- --native <candidate-archive> --out <dir>` and the existing full-pass compiler budget checker.
+2. After the baseline and ceilings are explicitly reviewed, on a machine matching the recorded platform, architecture, Node, Bun, and CPU, run `pnpm perf:adoption -- --native <candidate-archive> --out <dir>` and the existing full-pass compiler budget checker.
 3. Run `pnpm perf:startup:compare -- --base <pre-adoption-ref> --samples 15 --out <dir>` for source startup.
 
 **Migrate first, without touching startup latency: B4 (prompt scheduler) and B3 (hydration gate).** B4 is genuinely off-path, has the strongest race evidence (four named tests), and is 293 LOC in one file with a 758-line test. B3 is 63 LOC with a dedicated test file. Together they force the `effect` dependency into the graph, which lets you *measure the module-eval floor in isolation* before any on-path logic changes — that measurement is the real gate on whether B1/B2/B6 happen at all.

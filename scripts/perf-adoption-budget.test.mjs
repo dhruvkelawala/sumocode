@@ -39,6 +39,7 @@ function measurements() {
 function policy() {
 	return {
 		schemaVersion: 1,
+		status: "reviewed",
 		baseline: {
 			sourceCommit: "a".repeat(40),
 			samples: 15,
@@ -52,20 +53,33 @@ function policy() {
 }
 
 describe("adoption performance budget", () => {
-	it("commits a complete reviewed pre-adoption record", async () => {
+	it("requires explicit review and complete new evidence before accepting the integration baseline", async () => {
 		const committed = JSON.parse(await readFile(new URL("../docs/perf/adoption-baseline.json", import.meta.url), "utf8"));
 		expect(committed).toMatchObject({
 			schemaVersion: 1,
 			baseline: {
+				integrationBase: "97897ae98c052e5defde6f40e0da18ffe39a001f",
 				sourceCommit: expect.stringMatching(/^[0-9a-f]{40}$/),
 				samples: 15,
 			},
 		});
-		for (const [name, budget] of Object.entries(committed.budgets)) {
+		if (committed.status === "pending") {
+			expect(committed.baseline.measurements).toEqual({});
+			expect(committed.budgets).toEqual({});
+			expect(evaluateAdoptionBudget({ measurements: measurements() }, committed).verdict).toBe("failed");
+			return;
+		}
+		expect(committed.status).toBe("reviewed");
+		for (const name of Object.keys(measurements())) {
+			const budget = committed.budgets[name];
 			expect(budget.max, name).toBeGreaterThanOrEqual(budget.baseline);
 			const observation = committed.baseline.measurements[name];
-			if (name.endsWith("-ms")) expect(observation.samples, name).toHaveLength(15);
-			else expect(observation, name).toBe(budget.baseline);
+			if (name.endsWith("-ms")) {
+				expect(observation.samples, name).toHaveLength(15);
+				expect(observation.samples.every(Number.isFinite), name).toBe(true);
+				expect(observation.failures, name).toBe(0);
+				expect(observation.medianMs, name).toBe(budget.baseline);
+			} else expect(observation.kind === "size" ? observation.value : observation, name).toBe(budget.baseline);
 		}
 	});
 
@@ -87,6 +101,15 @@ describe("adoption performance budget", () => {
 			],
 		});
 		expect(evaluateAdoptionBudget({}, policy()).failedChecks).toContain("source-host-import-ms:collection");
+	});
+
+	it("rejects absent budgets and non-finite raw timing samples", () => {
+		expect(evaluateAdoptionBudget({}, { status: "reviewed", budgets: {} }).verdict).toBe("failed");
+		const observed = measurements();
+		observed["source-host-import-ms"].samples[0] = null;
+		expect(evaluateAdoptionBudget({ measurements: observed }, policy()).failedChecks).toContain("source-host-import-ms:collection");
+		observed["source-host-import-ms"] = size(1);
+		expect(evaluateAdoptionBudget({ measurements: observed }, policy()).failedChecks).toContain("source-host-import-ms:collection");
 	});
 
 	it("wraps bundle evaluation marks around the emitted module body", () => {
@@ -122,6 +145,30 @@ describe("adoption performance budget", () => {
 			machineMetadata: async () => ({ platform: "other", arch: "test", node: "test", bun: "test", cpu: "test" }),
 			collectMeasurements: async () => { throw new Error("must not collect"); },
 		})).rejects.toThrow("machine mismatch: platform");
+	});
+
+	it("collects unreviewed evidence without accepting or rewriting budgets", async () => {
+		const outDir = await mkdtemp(join(tmpdir(), "sumocode-adoption-collect-"));
+		roots.push(outDir);
+		const baseline = { ...policy(), status: "pending", budgets: {} };
+		const before = JSON.stringify(baseline);
+		const dependencies = {
+			readBaseline: async () => baseline,
+			readSourceIdentity: async () => ({ sourceCommit: "b".repeat(40), sourceClean: true }),
+			readArtifact: async () => ({ artifactDir: "/native", sourceCommit: "b".repeat(40), sourceClean: true, artifactSha256: "2".repeat(64) }),
+			machineMetadata: async () => ({ platform: "other" }),
+			collectMeasurements: async () => measurements(),
+		};
+		await expect(runAdoptionBudget({ nativeDir: "/native", outDir }, dependencies)).rejects.toThrow("pending quiet-machine");
+		const report = await runAdoptionBudget({ nativeDir: "/native", outDir, collectOnly: true }, dependencies);
+		expect(report.gate.verdict).toBe("unreviewed");
+		expect(JSON.stringify(baseline)).toBe(before);
+		const failedDir = join(outDir, "failed");
+		const failed = await runAdoptionBudget({ nativeDir: "/native", outDir: failedDir, collectOnly: true }, {
+			...dependencies,
+			collectMeasurements: async () => ({ "source-host-import-ms": timing(100, 14) }),
+		});
+		expect(failed.gate.verdict).toBe("failed");
 	});
 
 	it("records source and native identities without a baseline write path", async () => {

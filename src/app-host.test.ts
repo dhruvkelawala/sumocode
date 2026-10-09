@@ -32,6 +32,25 @@ describe("T3 role guidance", () => {
 		expect(guidance).toContain("SumoCode would isolate implement-smart in a git worktree");
 	});
 
+	it("carries each role's tool and MCP limits, since delegate_task cannot fence them", () => {
+		const guidance = buildT3RoleGuidance([
+			{ id: "review", label: "Review", description: "", systemPrompt: "review.", tools: ["read", "grep"], mcpServers: [] },
+			{ id: "docs", label: "Docs", description: "", systemPrompt: "document.", mcpServers: ["context7"] },
+		]);
+
+		expect(guidance).toContain("- review (inherits your model; tools: read, grep; no MCP): review.");
+		expect(guidance).toContain("- docs (inherits your model; MCP: context7): document.");
+		expect(guidance).toContain("`delegate_task` cannot fence a child's tools");
+	});
+
+	it("surfaces roles.json problems in the guidance itself", () => {
+		expect(buildT3RoleGuidance(BUILT_IN_ROLES)).not.toContain("roles.json has problems");
+		const guidance = buildT3RoleGuidance(BUILT_IN_ROLES, ["invalid roles.json: Unexpected token"]);
+
+		expect(guidance).toContain("roles.json has problems, so some roles above may be built-in defaults.");
+		expect(guidance).toContain("- invalid roles.json: Unexpected token");
+	});
+
 	it("omits the shared-checkout note when no role isolates", () => {
 		const guidance = buildT3RoleGuidance(BUILT_IN_ROLES.filter((role) => role.defaultWorktree !== true));
 

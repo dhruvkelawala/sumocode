@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { withAbortResponsiveTools } from "./abort-responsive-tools.js";
 import { installAnswerTool } from "./answer-tool.js";
-import { isAppHostProfile } from "./app-host.js";
+import { hasT3Orchestration, isAppHostProfile } from "./app-host.js";
 import { installInputHints } from "./cathedral/input-hints.js";
 import { installAltscreen } from "./cathedral/altscreen.js";
 import { installCathedralEditor } from "./cathedral/cathedral-editor.js";
@@ -248,6 +248,8 @@ export default function sumocode(pi: ExtensionAPI): void {
 		installAppHostProfile(pi);
 		logDiagnostic("extension_activate_end", {
 			profile: "app-host",
+			// false means SumoCode subagents stand in for T3's delegate_task.
+			t3Orchestration: hasT3Orchestration(),
 		});
 		return;
 	}

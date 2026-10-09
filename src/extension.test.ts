@@ -578,17 +578,22 @@ describe("app host profile", () => {
 		const systemPrompt = await systemPromptAfterAgentStart(handlers);
 		expect(systemPrompt.startsWith("BASE\n\n## SumoCode roles in T3 Code")).toBe(true);
 		expect(systemPrompt).toContain("`delegate_task`");
-		expect(systemPrompt).toContain("- research (inherits your model): act as a read-only investigator.");
+		expect(systemPrompt).toContain("- research (inherits your model; tools: read, grep, find, ls, bash): act as a read-only investigator.");
 		await expectEveryToolAbandonsOnAbort(pi.registerTool.mock.calls);
 	});
 
-	it("maps the operator's roles.json overrides into the T3 guidance", async () => {
-		const agentDir = process.env.PI_CODING_AGENT_DIR!;
-		mkdirSync(join(agentDir, "sumocode"), { recursive: true });
-		writeFileSync(join(agentDir, "sumocode", "roles.json"), JSON.stringify({ roles: [{ id: "research", model: "deepseek/deepseek-flash" }] }));
+	it("maps the operator's roles.json into the T3 guidance and picks up edits on the next turn", async () => {
+		const rolesPath = join(process.env.PI_CODING_AGENT_DIR!, "sumocode", "roles.json");
+		mkdirSync(join(rolesPath, ".."), { recursive: true });
+		writeFileSync(rolesPath, JSON.stringify({ roles: [{ id: "research", model: "deepseek/deepseek-flash" }] }));
 		const { handlers } = installAppHost({ T3_MCP_URL: "http://127.0.0.1:1/mcp", T3_MCP_BEARER_TOKEN: "test-token" });
 
-		expect(await systemPromptAfterAgentStart(handlers)).toContain("- research (model deepseek/deepseek-flash): act as a read-only investigator.");
+		expect(await systemPromptAfterAgentStart(handlers)).toContain("- research (model deepseek/deepseek-flash; tools: read, grep, find, ls, bash): act as a read-only investigator.");
+
+		writeFileSync(rolesPath, "{ not json");
+		const brokenTurn = await systemPromptAfterAgentStart(handlers);
+		expect(brokenTurn).toContain("- research (inherits your model; tools: read, grep, find, ls, bash)");
+		expect(brokenTurn).toContain("roles.json has problems");
 	});
 
 	it("draws no chrome and talks to no terminal host on session start", async () => {

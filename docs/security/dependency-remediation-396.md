@@ -332,8 +332,8 @@ No `braces` release clears the range, so neither an override nor a re-resolution
   - CI runs the report in the non-blocking job `dead-code report (knip, non-blocking)` (`pnpm dead-code` → `knip --no-exit-code`), so none of this gates merges. Acting on the new report is separate work.
 - **Lock delta, by package: everything is inside knip's tree.** The `source-map-js` change is §15.2.
   - Gone: `knip@5.88.1` and its glob chain (`fast-glob`, `micromatch`, `braces`, `fill-range`, `to-regex-range`, `is-number`, `glob-parent`, `is-glob`, `is-extglob`, `merge2`, `@nodelib/fs.*`, `fastq`, `reusify`, `run-parallel`, `queue-microtask`, `picomatch@2.3.2`), plus `minimist`, `formatly@0.3.0`, `unbash@2.2.0`, `smol-toml@1.7.1`, `yaml@2.8.3`, and `oxc-resolver@11.19.1` with its bindings.
-  - Added: `knip@6.41.0`, `oxc-parser@0.153.0` (with `@oxc-project/types` and bindings), `oxc-resolver@11.24.2` with bindings, `formatly@0.11.4`, `get-tsconfig`, `resolve-pkg-maps`, `package-manager-detector`, `picomatch@4.0.7`, `unbash@5.0.0`, `smol-toml@1.9.0`, `yaml@2.9.1`, `zod@4.6.5`, and oxc's wasm fallback (`@emnapi/*@1.11.2`, `@napi-rs/wasm-runtime@1.2.5`, `@tybys/wasm-util`).
-  - Already present: `tinyglobby@0.2.17` came in with vite and is now shared. `@emnapi/core@1.10.0` stays for `rolldown`/`vitest`.
+  - Added: `knip@6.41.0`, `oxc-parser@0.153.0` (with `@oxc-project/types` and bindings), `oxc-resolver@11.24.2` with bindings, `formatly@0.11.4`, `get-tsconfig`, `resolve-pkg-maps`, `package-manager-detector`, `picomatch@4.0.7`, `unbash@5.0.0`, `smol-toml@1.9.0`, `yaml@2.9.1`, `zod@4.6.5`, and oxc's wasm fallback (`@emnapi/core@1.11.2`, `@emnapi/runtime@1.11.2`, `@emnapi/wasi-threads@1.2.2`, `@napi-rs/wasm-runtime@1.2.5`, `@tybys/wasm-util`).
+  - Already present: `tinyglobby@0.2.17` came in with vite and is now shared. `@emnapi/core@1.10.0`, `@emnapi/runtime@1.10.0`, and `@emnapi/wasi-threads@1.2.1` stay for `rolldown`/`vitest`.
 - **Side effect:** knip 6 resolves `smol-toml@1.9.0`, which also clears the moderate advisory 1241205 that knip 5's `smol-toml@1.7.1` carried.
 
 ### 15.2 `source-map-js`: re-resolved `1.2.1` → `1.2.2` inside the declared range

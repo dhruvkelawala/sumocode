@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { withAbortResponsiveTools } from "./abort-responsive-tools.js";
 import { installAnswerTool } from "./answer-tool.js";
+import { isAppHostProfile } from "./app-host.js";
 import { installInputHints } from "./cathedral/input-hints.js";
 import { installAltscreen } from "./cathedral/altscreen.js";
 import { installCathedralEditor } from "./cathedral/cathedral-editor.js";
@@ -15,6 +16,7 @@ import { registerRolesCommand } from "./commands/roles.js";
 import { canonicalizeExtensionPath, type RealpathFn } from "./extension-entry-loader.js";
 import {
 	claimSumocodeRuntime,
+	installAppHostProfile,
 	installOrchestrationTools,
 	installRpcChildProfile,
 	isSumocodeAlreadyInstalledInProcess,
@@ -238,6 +240,14 @@ export default function sumocode(pi: ExtensionAPI): void {
 		installRpcChildProfile(pi);
 		logDiagnostic("extension_activate_end", {
 			profile: "rpc-child",
+		});
+		return;
+	}
+
+	if (isAppHostProfile()) {
+		installAppHostProfile(pi);
+		logDiagnostic("extension_activate_end", {
+			profile: "app-host",
 		});
 		return;
 	}

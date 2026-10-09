@@ -3,6 +3,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { withAbortResponsiveTools } from "./abort-responsive-tools.js";
 import { installActivityManagerBridge } from "./activity/manager-bridge.js";
 import { installAnswerTool } from "./answer-tool.js";
+import { buildT3RoleGuidance, hasT3Orchestration } from "./app-host.js";
 import { installBackgroundTasks, installTerminalTools } from "./background-tasks/index.js";
 import type { TerminalTaskManagerOptions } from "./background-tasks/task-manager.js";
 import { loadClaudeSubscriptions, registerAccountsCommand } from "./commands/accounts.js";
@@ -12,11 +13,12 @@ import { registerSumoReloadCommand } from "./commands/reload.js";
 import { registerRolesCommand } from "./commands/roles.js";
 import { installFastMode } from "./fast-mode.js";
 import { installHerdrRpcBridge } from "./herdr-rpc-bridge.js";
-import { installSumoInteractions } from "./interaction-registry.js";
+import { installAppHostInteractions, installSumoInteractions } from "./interaction-registry.js";
 import { installMemoryExtraction } from "./memory-extraction.js";
 import { installQuestionTool } from "./question-tool.js";
 import { installSkillInlineExpansion } from "./skill-inline.js";
 import { installSubagents } from "./subagents/index.js";
+import { loadRoles } from "./subagents/roles.js";
 import { logDiagnostic } from "./sumo-tui/runtime/diagnostics.js";
 import { getRpcLoginRuntime, registerRpcLoginCommand } from "./sumo-tui/pi-compat/login-command.js";
 import { registerRpcTreeNavigationCommand } from "./sumo-tui/pi-compat/tree-navigation-command.js";
@@ -160,4 +162,28 @@ export function installRpcChildProfile(pi: ExtensionAPI): void {
 		installUiSurfaces: false,
 		refreshAccountStatus: (ctx) => publishClaudeAccountStatus(ctx, { subscriptionLabel: claudeAccountSubscriptionLabel }),
 	});
+}
+
+/**
+ * Profile for apps that drive Pi themselves, such as T3 Code (see
+ * app-host.ts). The app owns the screen, so nothing here draws chrome or talks
+ * to Herdr. Inside T3 Code, T3's `delegate_task` replaces the `subagent_*`
+ * tools, and the role presets travel as delegation guidance instead.
+ */
+export function installAppHostProfile(pi: ExtensionAPI, env: NodeJS.ProcessEnv = process.env): void {
+	const toolPi = withAbortResponsiveTools(pi);
+	installSkillInlineExpansion(pi);
+	installMemoryExtraction(pi);
+	installFastMode(pi);
+	installQuestionTool(toolPi);
+	installAnswerTool(toolPi);
+	installTerminalTools(toolPi, installBackgroundTasks(toolPi));
+	if (hasT3Orchestration(env)) {
+		pi.on("before_agent_start", (event) => ({
+			systemPrompt: `${event.systemPrompt}\n\n${buildT3RoleGuidance(loadRoles({ env }).roles)}`,
+		}));
+	} else {
+		installSubagents(toolPi);
+	}
+	installAppHostInteractions(toolPi);
 }

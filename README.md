@@ -93,6 +93,18 @@ tar -xzf "sumocode-${VERSION}-macos-arm64.tar.gz"
 xattr -dr com.apple.quarantine ~/.local/lib/sumocode/sumocode-${VERSION}-macos-arm64
 ```
 
+#### Using SumoCode's Pi from other apps
+
+Apps that launch the `pi` CLI themselves, such as T3 Code's Pi provider, can use SumoCode's bundled Pi through `~/.local/bin/sumocode-pi-cli`, which `install.sh` also links. In T3 Code, set the Pi provider's binary path to `~/.local/bin/sumocode-pi-cli` (expanded to an absolute path). The link moves to each new release when you install it, so the setting survives upgrades.
+
+`sumocode-pi-cli` runs the bundled Pi with the bundled SumoCode extension, like `sumocode --no-sumo-tui`, with three differences:
+
+- `--version` prints the bundled Pi version, which is the version those apps check.
+- `--no-extensions` runs bare Pi. Apps pass it for helper runs such as commit messages and titles.
+- The extension loads its app-host profile. The app owns the screen, so SumoCode draws no chrome and keeps only what works through Pi's dialogs: the `question`, `terminal_*`, and Slate tools, memory, and the `/slate`, `/sumo:ship`, `/sumo:memory`, `/sumo:sync`, `/sumo:bootstrap`, `/fast`, and `/answer` commands.
+
+Inside T3 Code, T3's `delegate_task` replaces the `subagent_*` tools so child work appears in the app. The system prompt maps each SumoCode role to a `delegate_task` call on the Pi provider with the role's model and instructions. Herdr panes, themes, and the other commands stay in the `sumocode` shell.
+
 ### From source (contributors)
 
 The development loop requires Node.js 23.11.0 or newer, pnpm, and the Pi peer dependencies installed by pnpm:

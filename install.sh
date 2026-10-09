@@ -30,10 +30,12 @@ else
 	source_root="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)"
 fi
 
-for required in bin/sumocode bin/sumocode-pi extension/sumocode-extension.bundle.mjs extension/sumocode-rpc-extension.bundle.mjs share/sumo-face.ans CHANGELOG.md; do
+for required in bin/sumocode bin/sumocode-pi bin/sumocode-pi-cli extension/sumocode-extension.bundle.mjs extension/sumocode-rpc-extension.bundle.mjs share/sumo-face.ans CHANGELOG.md; do
 	[ -f "${source_root}/${required}" ] || { printf >&2 '[sumocode] incomplete release: missing %s\n' "${required}"; exit 65; }
 done
-[ -x "${source_root}/bin/sumocode" ] || { printf >&2 '%s\n' '[sumocode] bin/sumocode is not executable'; exit 65; }
+for executable in bin/sumocode bin/sumocode-pi-cli; do
+	[ -x "${source_root}/${executable}" ] || { printf >&2 '[sumocode] %s is not executable\n' "${executable}"; exit 65; }
+done
 
 release="$(basename -- "${source_root}")"
 destination="${prefix}/lib/sumocode/${release}"
@@ -41,9 +43,11 @@ mkdir -p "${destination}" "${prefix}/bin"
 cp -R "${source_root}/." "${destination}/"
 ln -sfn "${destination}/bin/sumocode" "${prefix}/bin/sumocode"
 ln -sfn "${destination}/bin/sumocode" "${prefix}/bin/sc"
+ln -sfn "${destination}/bin/sumocode-pi-cli" "${prefix}/bin/sumocode-pi-cli"
 
 printf '[sumocode] installed %s\n' "${destination}"
 printf '[sumocode] linked %s and %s -> %s\n' "${prefix}/bin/sumocode" "${prefix}/bin/sc" "${destination}/bin/sumocode"
+printf '[sumocode] linked %s -> %s (Pi CLI for apps such as T3 Code)\n' "${prefix}/bin/sumocode-pi-cli" "${destination}/bin/sumocode-pi-cli"
 case ":${PATH}:" in
 	*":${prefix}/bin:"*) ;;
 	*) printf '[sumocode] add %s/bin to PATH\n' "${prefix}" ;;

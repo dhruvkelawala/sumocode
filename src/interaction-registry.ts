@@ -158,3 +158,19 @@ export function installSumoInteractions(pi: ExtensionAPI, options: InstallSumoIn
 	registry.flushDiagnostics();
 	return registry.getSnapshot();
 }
+
+/**
+ * Commands for apps that drive Pi themselves (see app-host.ts). Each one works
+ * through Pi's RPC dialogs alone. The app owns the screen, terminal, and
+ * session lifecycle, so chrome, theme, editor, terminal-pane, worktree,
+ * reload/exit, and subagent commands stay in SumoCode.
+ */
+export function installAppHostInteractions(pi: ExtensionAPI, reporter?: InteractionDiagnosticReporter): InteractionRegistrySnapshot {
+	const registry = createInteractionRegistry(pi, reporter);
+	registry.install("commands.slate", registerSlateCommand);
+	registry.install("commands.ship", registerShipCommand);
+	registry.install("commands.sync", registerSumoSyncCommand);
+	registry.install("commands.memory", registerMemoryCommand);
+	registry.flushDiagnostics();
+	return registry.getSnapshot();
+}

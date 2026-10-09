@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -42,6 +42,10 @@ const AMBIENT_ENV_KEYS = [
 	"SUMOCODE_TASK_EXIT_FILE",
 	"SUMOCODE_TASK_STARTED_FILE",
 	"SUMOCODE_TASK_DIAG_FILE",
+	"SUMOCODE_APP_HOST",
+	"T3_MCP_URL",
+	"T3_MCP_BEARER_TOKEN",
+	"T3_PI_RUNTIME_MODE",
 ] as const;
 
 interface RealpathTable {
@@ -522,6 +526,101 @@ describe("rpc child profile", () => {
 			if (previousRpc === undefined) delete process.env.SUMOCODE_RPC_CHILD;
 			else process.env.SUMOCODE_RPC_CHILD = previousRpc;
 		}
+	});
+});
+
+describe("app host profile", () => {
+	const APP_HOST_COMMANDS = ["answer", "fast", "slate", "sumo:bootstrap", "sumo:memory", "sumo:ship", "sumo:sync"];
+	const TERMINAL_TOOLS = ["terminal_start", "terminal_check", "terminal_wait", "terminal_stop", "terminal_list"];
+
+	function installAppHost(env: Record<string, string>) {
+		Object.assign(process.env, { SUMOCODE_APP_HOST: "1", ...env });
+		const { pi, handlers } = buildPiStub();
+		// SAFETY: the pi double supplies the register*/on surfaces the extension installs on.
+		sumocode(pi as never);
+		const commandNames = pi.registerCommand.mock.calls.map((call) => String(call[0]));
+		// SAFETY: registerTool records definitions carrying a name field; the cast reads only that field.
+		const toolNames = pi.registerTool.mock.calls.map((call) => (call[0] as { name: string }).name);
+		return { pi, handlers, commandNames, toolNames };
+	}
+
+	async function systemPromptAfterAgentStart(handlers: Map<string, Handler[]>): Promise<string> {
+		let systemPrompt = "BASE";
+		for (const handler of handlers.get("before_agent_start") ?? []) {
+			// SAFETY: before_agent_start handlers read prompt/systemPrompt and may return a replacement prompt.
+			const result = await handler({ type: "before_agent_start", prompt: "hi", systemPrompt }, { ...buildCtxStub(), mode: "rpc" } as never) as { systemPrompt?: string } | undefined;
+			if (result?.systemPrompt !== undefined) systemPrompt = result.systemPrompt;
+		}
+		return systemPrompt;
+	}
+
+	it("registers only commands that work through Pi's RPC dialogs", () => {
+		const { commandNames } = installAppHost({});
+
+		expect([...commandNames].sort()).toEqual(APP_HOST_COMMANDS);
+	});
+
+	it("keeps SumoCode subagents when no T3 bridge is present", async () => {
+		const { pi, toolNames, handlers } = installAppHost({});
+
+		expect(toolNames).toEqual(expect.arrayContaining(["question", ...TERMINAL_TOOLS, "subagent_spawn", "subagent_list"]));
+		expect(await systemPromptAfterAgentStart(handlers)).not.toContain("SumoCode roles in T3 Code");
+		await expectEveryToolAbandonsOnAbort(pi.registerTool.mock.calls);
+	});
+
+	it("swaps subagent tools for T3 delegation guidance inside a T3 chat session", async () => {
+		const { pi, toolNames, commandNames, handlers } = installAppHost({ T3_MCP_URL: "http://127.0.0.1:1/mcp", T3_MCP_BEARER_TOKEN: "test-token" });
+
+		expect(toolNames.filter((name) => name.startsWith("subagent_"))).toEqual([]);
+		expect(toolNames).toEqual(expect.arrayContaining(["question", ...TERMINAL_TOOLS]));
+		// The command list must not depend on the bridge: T3's discovery probe runs without it.
+		expect([...commandNames].sort()).toEqual(APP_HOST_COMMANDS);
+		const systemPrompt = await systemPromptAfterAgentStart(handlers);
+		expect(systemPrompt.startsWith("BASE\n\n## SumoCode roles in T3 Code")).toBe(true);
+		expect(systemPrompt).toContain("`delegate_task`");
+		expect(systemPrompt).toContain("- research (inherits your model; tools: read, grep, find, ls, bash): act as a read-only investigator.");
+		await expectEveryToolAbandonsOnAbort(pi.registerTool.mock.calls);
+	});
+
+	it("maps the operator's roles.json into the T3 guidance and picks up edits on the next turn", async () => {
+		const rolesPath = join(process.env.PI_CODING_AGENT_DIR!, "sumocode", "roles.json");
+		mkdirSync(join(rolesPath, ".."), { recursive: true });
+		writeFileSync(rolesPath, JSON.stringify({ roles: [{ id: "research", model: "deepseek/deepseek-flash" }] }));
+		const { handlers } = installAppHost({ T3_MCP_URL: "http://127.0.0.1:1/mcp", T3_MCP_BEARER_TOKEN: "test-token" });
+
+		expect(await systemPromptAfterAgentStart(handlers)).toContain("- research (model deepseek/deepseek-flash; tools: read, grep, find, ls, bash): act as a read-only investigator.");
+
+		writeFileSync(rolesPath, "{ not json");
+		const brokenTurn = await systemPromptAfterAgentStart(handlers);
+		expect(brokenTurn).toContain("- research (inherits your model; tools: read, grep, find, ls, bash)");
+		expect(brokenTurn).toContain("roles.json has problems");
+	});
+
+	it("draws no chrome and talks to no terminal host on session start", async () => {
+		const { handlers } = installAppHost({ HERDR_ENV: "1", HERDR_PANE_ID: "pane-1", HERDR_SOCKET_PATH: "/nonexistent/herdr.sock" });
+		const ctx = { ...buildCtxStub(), mode: "rpc" };
+		try {
+			for (const handler of handlers.get("session_start") ?? []) {
+				// SAFETY: the ctx double supplies the ui surface the session_start handlers read.
+				await handler({ type: "session_start" }, ctx as never);
+			}
+		} finally {
+			for (const key of ["HERDR_ENV", "HERDR_PANE_ID", "HERDR_SOCKET_PATH"]) delete process.env[key];
+		}
+
+		expect(ctx.ui.setFooter).not.toHaveBeenCalled();
+		expect(ctx.ui.setHeader).not.toHaveBeenCalled();
+		expect(ctx.ui.setEditorComponent).not.toHaveBeenCalled();
+		expect(ctx.ui.setWorkingIndicator).not.toHaveBeenCalled();
+		expect(ctx.ui.setWidget).not.toHaveBeenCalled();
+		expect(ctx.ui.custom).not.toHaveBeenCalled();
+	});
+
+	it("leaves SumoCode's own RPC child on the full rpc-child profile", () => {
+		const { commandNames, toolNames } = installAppHost({ SUMOCODE_RPC_CHILD: "1" });
+
+		expect(commandNames).toContain("sumo:review");
+		expect(toolNames).toContain("subagent_spawn");
 	});
 });
 

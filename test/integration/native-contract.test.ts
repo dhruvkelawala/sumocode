@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { basename, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AgentStartEvent, ExtensionContext } from "@earendil-works/pi-coding-agent";
@@ -368,10 +368,64 @@ nativeDescribe("native executable contract", () => {
 		}
 	});
 
+	it("installs sumocode-pi-cli as a Pi CLI that reports Pi's version and runs direct Pi", () => {
+		const prefix = tempRoot("sumocode-native-install-pi-cli-");
+		const result = spawnSync("sh", [join(ARCHIVE, "install.sh")], {
+			env: { ...process.env, SUMOCODE_INSTALL_PREFIX: prefix }, encoding: "utf8",
+		});
+		expect(result.status, result.stderr).toBe(0);
+		const piCli = join(prefix, "bin", "sumocode-pi-cli");
+		const env = buildSpawnEnv(process.env, { PI_BIN: "" });
+		const piVersion = spawnSync(NATIVE_PI, ["--version"], { env, encoding: "utf8" });
+		expect(piVersion.status).toBe(0);
+		for (const flag of ["--version", "-v"]) {
+			const version = spawnSync(piCli, [flag], { env, encoding: "utf8" });
+			expect(version.status, version.stderr).toBe(0);
+			expect(version.stdout).toBe(piVersion.stdout);
+		}
+		const plan = spawnSync(piCli, ["--dry-run", "--mode", "rpc", "--no-session"], { env, encoding: "utf8" });
+		expect(plan.status, plan.stderr).toBe(0);
+		expect(dryRunField(plan.stdout, "SUMO_RPC")).toBe("");
+		expect(dryRunField(plan.stdout, "ARGS")).toBe("--mode rpc --no-session");
+		const execLine = dryRunExecLine(plan.stdout);
+		expect(execLine).toContain(realpathSync(join(prefix, "lib/sumocode", basename(ARCHIVE), "bin/sumocode-pi")));
+		expect(execLine).toContain("extension/sumocode-extension.bundle.mjs");
+	});
+
+	it("gives apps the app-host command set and bare Pi for --no-extensions helper runs", () => {
+		const piCli = join(ARCHIVE, "bin/sumocode-pi-cli");
+		const sumocodeCommands = (extraArgs: readonly string[]): string[] => {
+			const result = spawnSync(piCli, ["--mode", "rpc", "--offline", "--no-session", ...extraArgs], {
+				cwd: tempRoot("sumocode-native-app-host-cwd-"),
+				// A private agent dir keeps the operator's own Pi packages out of the command list.
+				env: buildSpawnEnv(process.env, { PI_BIN: "", PI_CODING_AGENT_DIR: tempRoot("sumocode-native-app-host-agent-") }),
+				input: `${JSON.stringify({ type: "get_commands" })}\n`,
+				encoding: "utf8",
+				timeout: 30_000,
+			});
+			expect(result.status, result.stderr).toBe(0);
+			// SAFETY: Pi's RPC stdout is JSONL; only the get_commands response's name/sourceInfo fields are read.
+			const records = result.stdout.split("\n").filter((line) => line.startsWith("{")).map((line) => JSON.parse(line) as {
+				type?: string;
+				command?: string;
+				data?: { commands?: { name: string; sourceInfo?: { path?: string } }[] };
+			});
+			const response = records.find((record) => record.type === "response" && record.command === "get_commands");
+			expect(response, result.stdout).toBeDefined();
+			return (response?.data?.commands ?? [])
+				.filter((command) => command.sourceInfo?.path?.endsWith("sumocode-extension.bundle.mjs") === true)
+				.map((command) => command.name)
+				.sort();
+		};
+
+		expect(sumocodeCommands([])).toEqual(["answer", "fast", "slate", "sumo:bootstrap", "sumo:memory", "sumo:ship", "sumo:sync"]);
+		expect(sumocodeCommands(["--no-extensions"])).toEqual([]);
+	}, 60_000);
+
 	it("rejects an install missing the RPC extension bundle", () => {
 		const root = tempRoot("sumocode-native-incomplete-install-");
 		for (const directory of ["bin", "extension", "share"]) mkdirSync(join(root, directory));
-		for (const file of ["bin/sumocode", "bin/sumocode-pi", "extension/sumocode-extension.bundle.mjs", "share/sumo-face.ans"]) {
+		for (const file of ["bin/sumocode", "bin/sumocode-pi", "bin/sumocode-pi-cli", "extension/sumocode-extension.bundle.mjs", "share/sumo-face.ans"]) {
 			writeFileSync(join(root, file), "");
 		}
 		chmodSync(join(root, "bin/sumocode"), 0o755);

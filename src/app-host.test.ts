@@ -1,0 +1,62 @@
+import { describe, expect, it } from "vitest";
+import { buildT3RoleGuidance, hasT3Orchestration, isAppHostProfile } from "./app-host.js";
+import { BUILT_IN_ROLES } from "./subagents/roles.js";
+
+describe("app host detection", () => {
+	it("selects the app host profile only for the sumocode-pi-cli marker", () => {
+		expect(isAppHostProfile({ SUMOCODE_APP_HOST: "1" })).toBe(true);
+		expect(isAppHostProfile({})).toBe(false);
+		expect(isAppHostProfile({ SUMOCODE_APP_HOST: "0" })).toBe(false);
+		// T3's own variables do not select the profile: its discovery probe runs without them.
+		expect(isAppHostProfile({ T3_MCP_URL: "http://127.0.0.1:1/mcp", T3_MCP_BEARER_TOKEN: "token" })).toBe(false);
+	});
+
+	it("reports T3 orchestration only when the bridge has both its endpoint and token", () => {
+		expect(hasT3Orchestration({ T3_MCP_URL: "http://127.0.0.1:1/mcp", T3_MCP_BEARER_TOKEN: "token" })).toBe(true);
+		expect(hasT3Orchestration({ T3_MCP_URL: "http://127.0.0.1:1/mcp" })).toBe(false);
+		expect(hasT3Orchestration({ T3_MCP_BEARER_TOKEN: "token" })).toBe(false);
+		expect(hasT3Orchestration({ T3_PI_RUNTIME_MODE: "full-access" })).toBe(false);
+	});
+});
+
+describe("T3 role guidance", () => {
+	it("maps every role to a delegate_task target with its instructions", () => {
+		const guidance = buildT3RoleGuidance([
+			{ id: "research", label: "Research", description: "", systemPrompt: "investigate read-only." },
+			{ id: "implement-smart", label: "Implement", description: "", systemPrompt: "implement with judgment.", model: "openai-codex/gpt-6.1-sol", defaultWorktree: true },
+		]);
+
+		expect(guidance).toContain("`target.providerInstanceId` to the Pi provider instance (driverKind `pi` in `orchestrator_capabilities`)");
+		expect(guidance).toContain("- research (inherits your model): investigate read-only.");
+		expect(guidance).toContain("- implement-smart (model openai-codex/gpt-6.1-sol): implement with judgment.");
+		expect(guidance).toContain("SumoCode would isolate implement-smart in a git worktree");
+	});
+
+	it("carries each role's tool and MCP limits, since delegate_task cannot fence them", () => {
+		const guidance = buildT3RoleGuidance([
+			{ id: "review", label: "Review", description: "", systemPrompt: "review.", tools: ["read", "grep"], mcpServers: [] },
+			{ id: "docs", label: "Docs", description: "", systemPrompt: "document.", mcpServers: ["context7"] },
+			{ id: "think", label: "Think", description: "", systemPrompt: "think.", tools: [] },
+		]);
+
+		expect(guidance).toContain("- review (inherits your model; tools: read, grep; no MCP): review.");
+		expect(guidance).toContain("- docs (inherits your model; MCP: context7): document.");
+		// An empty list launches a SumoCode child with --no-tools.
+		expect(guidance).toContain("- think (inherits your model; no tools): think.");
+		expect(guidance).toContain("`delegate_task` cannot fence a child's tools");
+	});
+
+	it("surfaces roles.json problems in the guidance itself", () => {
+		expect(buildT3RoleGuidance(BUILT_IN_ROLES)).not.toContain("roles.json has problems");
+		const guidance = buildT3RoleGuidance(BUILT_IN_ROLES, ["invalid roles.json: Unexpected token"]);
+
+		expect(guidance).toContain("roles.json has problems, so some roles above may be built-in defaults.");
+		expect(guidance).toContain("- invalid roles.json: Unexpected token");
+	});
+
+	it("omits the shared-checkout note when no role isolates", () => {
+		const guidance = buildT3RoleGuidance(BUILT_IN_ROLES.filter((role) => role.defaultWorktree !== true));
+
+		expect(guidance).not.toContain("git worktree");
+	});
+});

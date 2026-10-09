@@ -179,9 +179,12 @@ export function installAppHostProfile(pi: ExtensionAPI, env: NodeJS.ProcessEnv =
 	installAnswerTool(toolPi);
 	installTerminalTools(toolPi, installBackgroundTasks(toolPi));
 	if (hasT3Orchestration(env)) {
-		pi.on("before_agent_start", (event) => ({
-			systemPrompt: `${event.systemPrompt}\n\n${buildT3RoleGuidance(loadRoles({ env }).roles)}`,
-		}));
+		// Loaded once, like the subagent tools' role guidance. No spawn step checks
+		// roles.json here, so its warnings would otherwise vanish.
+		const { roles, warnings } = loadRoles({ env });
+		if (warnings.length > 0) logDiagnostic("app_host_roles_warnings", { warnings: warnings.map((warning) => warning.message) });
+		const guidance = buildT3RoleGuidance(roles);
+		pi.on("before_agent_start", (event) => ({ systemPrompt: `${event.systemPrompt}\n\n${guidance}` }));
 	} else {
 		installSubagents(toolPi);
 	}

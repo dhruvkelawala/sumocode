@@ -19,10 +19,14 @@ while [ -L "${script}" ]; do
 done
 bin_dir="$(CDPATH= cd -- "$(dirname -- "${script}")" && pwd -P)"
 
+# Apps probe the version with exactly one argument (`pi --version`). Matching
+# only that form keeps a `-v` that is another flag's value from being misread.
+if [ "$#" -eq 1 ] && { [ "$1" = "--version" ] || [ "$1" = "-v" ]; }; then
+	exec "${bin_dir}/sumocode-pi" --version
+fi
 for arg in "$@"; do
 	case "${arg}" in
 		--) break ;;
-		-v|--version) exec "${bin_dir}/sumocode-pi" --version ;;
 		# The launcher always adds SumoCode's extension with -e, which Pi loads
 		# even under --no-extensions. Apps pass that flag for helper runs (T3's
 		# commit messages and titles), so honor it with bare Pi.

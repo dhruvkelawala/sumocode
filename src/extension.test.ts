@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -580,6 +580,15 @@ describe("app host profile", () => {
 		expect(systemPrompt).toContain("`delegate_task`");
 		expect(systemPrompt).toContain("- research (inherits your model): act as a read-only investigator.");
 		await expectEveryToolAbandonsOnAbort(pi.registerTool.mock.calls);
+	});
+
+	it("maps the operator's roles.json overrides into the T3 guidance", async () => {
+		const agentDir = process.env.PI_CODING_AGENT_DIR!;
+		mkdirSync(join(agentDir, "sumocode"), { recursive: true });
+		writeFileSync(join(agentDir, "sumocode", "roles.json"), JSON.stringify({ roles: [{ id: "research", model: "deepseek/deepseek-flash" }] }));
+		const { handlers } = installAppHost({ T3_MCP_URL: "http://127.0.0.1:1/mcp", T3_MCP_BEARER_TOKEN: "test-token" });
+
+		expect(await systemPromptAfterAgentStart(handlers)).toContain("- research (model deepseek/deepseek-flash): act as a read-only investigator.");
 	});
 
 	it("draws no chrome and talks to no terminal host on session start", async () => {

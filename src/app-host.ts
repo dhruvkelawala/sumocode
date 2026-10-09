@@ -24,7 +24,7 @@ export function hasT3Orchestration(env: NodeJS.ProcessEnv = process.env): boolea
 
 function roleLimits(role: SubagentRole): string[] {
 	const limits = [role.model === undefined ? "inherits your model" : `model ${role.model}`];
-	if (role.tools !== undefined) limits.push(`tools: ${role.tools.join(", ")}`);
+	if (role.tools !== undefined) limits.push(role.tools.length === 0 ? "no tools" : `tools: ${role.tools.join(", ")}`);
 	if (role.mcpServers !== undefined) limits.push(role.mcpServers.length === 0 ? "no MCP" : `MCP: ${role.mcpServers.join(", ")}`);
 	return limits;
 }

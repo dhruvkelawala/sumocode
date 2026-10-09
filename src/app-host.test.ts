@@ -36,10 +36,13 @@ describe("T3 role guidance", () => {
 		const guidance = buildT3RoleGuidance([
 			{ id: "review", label: "Review", description: "", systemPrompt: "review.", tools: ["read", "grep"], mcpServers: [] },
 			{ id: "docs", label: "Docs", description: "", systemPrompt: "document.", mcpServers: ["context7"] },
+			{ id: "think", label: "Think", description: "", systemPrompt: "think.", tools: [] },
 		]);
 
 		expect(guidance).toContain("- review (inherits your model; tools: read, grep; no MCP): review.");
 		expect(guidance).toContain("- docs (inherits your model; MCP: context7): document.");
+		// An empty list launches a SumoCode child with --no-tools.
+		expect(guidance).toContain("- think (inherits your model; no tools): think.");
 		expect(guidance).toContain("`delegate_task` cannot fence a child's tools");
 	});
 

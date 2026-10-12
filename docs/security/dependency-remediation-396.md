@@ -2,6 +2,7 @@
 
 **Status:** public evidence record for [issue #396](https://github.com/dhruvkelawala/sumocode/issues/396). **Local development graph remediated; consumer-runtime graph still upstream-blocked** (correction notice below and §9). **Post-publication advisory 1193945 (`smol-toml`, local-development only) is recorded in §13** — remediated by a narrow override after the v0.5.1 baseline.
 **Post-publication re-check at Pi `0.85.1` (recorded 2026-09-11, §14):** the six local overrides are retired as redundant, the local graph audits clean without them, and the consumer-runtime blocker is unchanged.
+**Post-publication advisories 1240992 (`braces`) and 1241209 (`source-map-js`), both local-development only (recorded 2026-10-09, §15):** removed from the graph by a knip 6 upgrade and an in-range lock re-resolution. No policy record.
 **Commit range:** baseline `397be093` → candidate `514da877` ([PR #453](https://github.com/dhruvkelawala/sumocode/pull/453), branch `fix/396-dependency-audit-policy`)
 **Tail repair:** spec finding SA123 — the per-advisory public map required by issue #396 was not present in the published PR #453 diff/body, which described remediation only in aggregate. This file supplies that map.
 **Correction:** the first published version of this map (head `7519bab9`, PR #467) presented the nine consumer-runtime advisories as remediated by the Pi `0.84.4` peer floor. Codex P1 (PR #467 discussion 3941838506) correctly rejected that framing: the floor does not enforce the patched transitives in consumer graphs, the empty local policy `records[]` describes only this repository's own overridden graph, and this repo's CI does not audit consumer graphs. This page corrects those claims, keeps the valid 15-advisory map and the historical counts, marks Plan 102 **incomplete / consumer-upstream-blocked** on its consumer-runtime criterion, and adds explicit user-facing remediation guidance (§10). A proper consumer-graph gate is a separate implementation queued by the coordinating parent; **this documentation correction is not the security fix**.
@@ -305,3 +306,45 @@ At the re-check baseline `pnpm audit` reported exactly two findings, both **mode
 Pi `0.85.1` still does not constrain the patched transitives. `@earendil-works/pi-ai@0.85.1` pins `@google/genai: 1.52.0` exactly, and `@google/genai@1.52.0` declares `protobufjs ^7.5.4` / `ws ^8.18.0`; `@earendil-works/pi-coding-agent@0.85.1` pins `minimatch: 10.2.5` exactly, and `minimatch@10.2.5` declares `brace-expansion ^5.0.5`. Those ranges permit the vulnerable patches, so a retained consumer lock can still carry the §9 advisories; the peer floor is a compatibility statement, not a security constraint (§6). A **fresh** consumer resolution of the Pi `0.85.1` trio was re-run for this record and audited clean (`protobufjs 7.6.6`, `ws 8.21.3`, `brace-expansion 5.0.9`; `pnpm audit --json` exit `0`) — a resolution-time observation only (§6, §11), not consumer remediation. Consumer guidance remains §10.
 
 **Sources:** `pnpm audit --json`, `pnpm install --lockfile-only`, `node scripts/check-dependency-audit.mjs`, `pnpm vitest run scripts/check-dependency-audit.test.mjs` (run 2026-09-11 against `d4f35f5e` and this re-check's lock); `package.json#pnpm.overrides` at `d4f35f5e`; npm registry manifests for `@earendil-works/pi-ai@0.85.1`, `@earendil-works/pi-coding-agent@0.85.1`, `@google/genai@1.52.0`, `minimatch@10.2.5`, `knip@5.88.1`, `vite@8.0.16`, `postcss@8.5.23`; fresh-consumer probe resolved from `pi-ai`/`pi-coding-agent`/`pi-tui` `0.85.1` + `typebox` (pnpm 10.29.2).
+
+## 15. Post-publication advisories 1240992 (`braces`) and 1241209 (`source-map-js`) — repo-wide CI unblock (recorded 2026-10-09)
+
+**Status:** both removed from the local development graph. No policy record, no waiver, and `records[]` stays empty (§9). **Baseline:** `109a7690` (`chore(release): record v0.7.6 on main`). GHSA published both on 2026-09-18, but `main`'s CI still passed on 2026-09-30, so they reached the npm audit endpoint later. The exact propagation date is unknown. Every CI run since then fails the `Dependency audit policy` step, first with `unclassified high advisory 1240992`.
+
+| Field | 1240992 | 1241209 |
+|---|---|---|
+| GHSA / CVE | [GHSA-vfj7-8cjw-p6xm](https://github.com/advisories/GHSA-vfj7-8cjw-p6xm) / CVE-2026-93687 | [GHSA-68fv-2mgg-jv7q](https://github.com/advisories/GHSA-68fv-2mgg-jv7q) / CVE-2026-93749 |
+| Title | stack-exhaustion denial of service through deeply nested patterns | event-loop denial of service through indexed source-map section offsets |
+| GHSA severity | high (7.5) | high (7.5) |
+| Vulnerable / first patched | `<=3.0.3` / none published | `>=1.0.0 <1.2.2` / `>=1.2.2` |
+| Installed at baseline | `3.0.3` | `1.2.1` |
+| pnpm audit chains | `.>knip>fast-glob>micromatch>braces` | `.>vite>postcss>source-map-js`, `.>vitest>vite>postcss>source-map-js`, `.>vitest>@vitest/mocker>vite>postcss>source-map-js` |
+| Role | local-development (knip is a devDependency) | local-development (vite and vitest are devDependencies) |
+
+### 15.1 `braces`: knip `5.88.1` → `6.41.0`
+
+No `braces` release clears the range, so neither an override nor a re-resolution can remove it. §13.2 rules out a policy record, because a `knip` chain fails the checker's `non-consumer path` rule and recording it would weaken the gate. The remaining fix is to drop the chain. `knip@6` replaced `fast-glob` with `tinyglobby`, so `fast-glob`, `micromatch`, and `braces` leave the graph entirely, and `pnpm why braces` returns nothing.
+
+- **Tool-behavior change, as §13.2 predicted:** the `pnpm dead-code` report goes from 492 to 307 lines with the unchanged `knip.json` (only its `$schema` moves to `knip@6`).
+  - Unused exported types drop from 294 to 100 and unused exports rise from 163 to 169.
+  - The `@oxlint/plugins` unused-devDependency finding disappears, and unused files drop from 9 to 8.
+  - Two categories are new: `Unlisted binaries` (`herdr`, `taskkill.exe`) and `Unresolved imports` (`bin/sumocode.sh` from `test/integration/spawn-pi-pty.test.ts`).
+  - CI runs the report in the non-blocking job `dead-code report (knip, non-blocking)` (`pnpm dead-code` → `knip --no-exit-code`), so none of this gates merges. Acting on the new report is separate work.
+- **Lock delta, by package: everything is inside knip's tree.** The `source-map-js` change is §15.2.
+  - Gone: `knip@5.88.1` and its glob chain (`fast-glob`, `micromatch`, `braces`, `fill-range`, `to-regex-range`, `is-number`, `glob-parent`, `is-glob`, `is-extglob`, `merge2`, `@nodelib/fs.*`, `fastq`, `reusify`, `run-parallel`, `queue-microtask`, `picomatch@2.3.2`), plus `minimist`, `formatly@0.3.0`, `unbash@2.2.0`, `smol-toml@1.7.1`, `yaml@2.8.3`, and `oxc-resolver@11.19.1` with its bindings.
+  - Added: `knip@6.41.0`, `oxc-parser@0.153.0` (with `@oxc-project/types` and bindings), `oxc-resolver@11.24.2` with bindings, `formatly@0.11.4`, `get-tsconfig`, `resolve-pkg-maps`, `package-manager-detector`, `picomatch@4.0.7`, `unbash@5.0.0`, `smol-toml@1.9.0`, `yaml@2.9.1`, `zod@4.6.5`, and oxc's wasm fallback (`@emnapi/core@1.11.2`, `@emnapi/runtime@1.11.2`, `@emnapi/wasi-threads@1.2.2`, `@napi-rs/wasm-runtime@1.2.5`, `@tybys/wasm-util`).
+  - Already present: `tinyglobby@0.2.17` came in with vite and is now shared. `@emnapi/core@1.10.0`, `@emnapi/runtime@1.10.0`, and `@emnapi/wasi-threads@1.2.1` stay for `rolldown`/`vitest`.
+- **Side effect:** knip 6 resolves `smol-toml@1.9.0`, which also clears the moderate advisory 1241205 that knip 5's `smol-toml@1.7.1` carried.
+
+### 15.2 `source-map-js`: re-resolved `1.2.1` → `1.2.2` inside the declared range
+
+`postcss@8.5.23` declares `source-map-js ^1.2.1`, so `pnpm update source-map-js` moves the lock to the patched `1.2.2` without an override. That is the same remediation class as the §14 re-resolutions. The lock diff is exactly that one package.
+
+### 15.3 Verification owner
+
+The automated gate (§8):
+
+- `node scripts/check-dependency-audit.mjs` → `dependency audit policy passed; consumer-runtime upstream-blocked: 0; local-development high/critical: 0` (exit 0). `pnpm audit --json` reports 0 advisories at any severity.
+- `.github/workflows/ci.yml` job `typecheck-and-test`, step `Dependency audit policy`, is the merge blocker this section unblocks.
+
+**Sources:** `pnpm audit --json` and `pnpm why` against `109a7690` and the candidate lock (run 2026-10-09); GHSA-vfj7-8cjw-p6xm and GHSA-68fv-2mgg-jv7q; npm registry metadata for `knip@5.88.1`/`6.41.0`, `fast-glob@3.3.3`, `micromatch@4.0.8`, `braces`, `source-map-js`, and `postcss@8.5.23`.

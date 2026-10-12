@@ -33,7 +33,7 @@ fi
 for required in bin/sumocode bin/sumocode-pi bin/sumocode-pi-cli extension/sumocode-extension.bundle.mjs extension/sumocode-rpc-extension.bundle.mjs share/sumo-face.ans CHANGELOG.md; do
 	[ -f "${source_root}/${required}" ] || { printf >&2 '[sumocode] incomplete release: missing %s\n' "${required}"; exit 65; }
 done
-for executable in bin/sumocode bin/sumocode-pi-cli; do
+for executable in bin/sumocode bin/sumocode-pi bin/sumocode-pi-cli; do
 	[ -x "${source_root}/${executable}" ] || { printf >&2 '[sumocode] %s is not executable\n' "${executable}"; exit 65; }
 done
 

@@ -403,7 +403,7 @@ describe("waitForScreenText", () => {
 
 /**
  * Plan 096 fixture table: one row per option-consumption class pinned to
- * @earendil-works/pi-coding-agent 0.99.1 `dist/cli/args.js` `parseArgs()`.
+ * @earendil-works/pi-coding-agent 1.1.0 `dist/cli/args.js` `parseArgs()`.
  * Each row runs `bin/sumocode.sh --dry-run <args>` under a real PTY so the
  * launcher selects its RPC path and exercises `extract_first_positional`
  * (the execFile-based dry-run tests above are non-TTY and never extract).
@@ -485,6 +485,12 @@ const OPTION_CONSUMPTION_ROWS: readonly OptionConsumptionRow[] = [
 		args: ["--offline", "PROMPT"],
 		expectedPrompt: "PROMPT",
 		expectedArgs: "--offline",
+	},
+	{
+		name: "known boolean --no-mcp (Pi 1.0.4) never consumes the prompt",
+		args: ["--no-mcp", "PROMPT"],
+		expectedPrompt: "PROMPT",
+		expectedArgs: "--no-mcp",
 	},
 	{
 		name: "unknown extension flag consumes one dash-free value",

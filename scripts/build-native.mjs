@@ -4,6 +4,7 @@
 //   sumocode-<version>-<platform-tag>/
 //     bin/sumocode              Bun-compiled host executable
 //     bin/sumocode-pi           Bun-compiled Pi child
+//     bin/sumocode-pi-cli       Pi CLI entry for other apps (src/native/sumocode-pi-cli.sh)
 //     theme/ assets/ export-html/ photon_rs_bg.wasm package.json   (Pi sidecars)
 //     share/sumo-face.ans                                          (host sidecar)
 //     extension/sumocode-extension.bundle.mjs                      (child extension)
@@ -12,7 +13,7 @@
 // Nothing produced here is ever committed: dist/** is git-ignored (#439).
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { copyFileSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { createRequire, isBuiltin } from "node:module";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -23,7 +24,7 @@ const root = resolve(import.meta.dirname, "..");
 const require = createRequire(import.meta.url);
 
 const BUN_PIN = readFileSync(resolve(root, ".bun-version"), "utf8").trim();
-const PI_PIN = "0.99.1";
+const PI_PIN = "1.1.0";
 const { version } = JSON.parse(readFileSync(resolve(root, "package.json"), "utf8"));
 // Pi 0.85.1+ registers Bedrock inside bun/runtime-setup.js (0.84.4 used a
 // dynamic register-bedrock.js import in bun/cli.js). The child strips only these
@@ -398,6 +399,10 @@ async function main() {
 	// /changelog reads CHANGELOG.md from the archive root in native launches.
 	copyFileSync(resolve(root, "CHANGELOG.md"), join(outDir, "CHANGELOG.md"));
 	copyFileSync(resolve(root, "install.sh"), join(outDir, "install.sh"));
+	// The Pi CLI entry resolves its siblings from its own directory, so it sits
+	// in bin/ beside the host and the Pi child.
+	copyFileSync(resolve(root, "src/native/sumocode-pi-cli.sh"), join(binDir, "sumocode-pi-cli"));
+	chmodSync(join(binDir, "sumocode-pi-cli"), 0o755);
 
 	// 5. SHA256SUMS over the archive contents.
 	const checksumLines = [];

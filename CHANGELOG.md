@@ -10,6 +10,28 @@ landed between the original scaffold and this release.
 
 ## [Unreleased]
 
+### Added
+- **Pi CLI for other apps**: `install.sh` also links
+  `~/.local/bin/sumocode-pi-cli`, so apps that launch `pi` themselves, such
+  as T3 Code, can run SumoCode's bundled Pi and extension. It behaves like
+  `sumocode --no-sumo-tui`, but `--version` prints the bundled Pi version,
+  which is the version those apps check, and `--no-extensions` runs bare Pi.
+- **App-host profile**: under `sumocode-pi-cli` the extension skips its
+  terminal UI, Herdr bridge, and terminal-only commands, and keeps the
+  `question`, `terminal_*`, and Slate tools, memory, and seven commands that
+  work through Pi's dialogs. Inside T3 Code, T3's `delegate_task` replaces the
+  `subagent_*` tools, and the system prompt maps each SumoCode role to a
+  `delegate_task` call with the role's model and instructions.
+
+### Changed
+- **Pi 1.1.0**: the peer range, the dev pin, and the native build's bundled
+  Pi move from 0.99.1 to 1.1.0. The launcher treats Pi's new `--no-mcp`
+  flag as a boolean, so it never takes the prompt as its value. Pi 1.x opens
+  plain interactive sessions (`pi` with the extension, `sumocode
+  --no-sumo-tui`) fullscreen, where SumoCode's classic footer does not draw;
+  pass `--tui-mode regular` or set `"tuiMode": "regular"` to keep it. The
+  `sumocode` shell and T3 Code run Pi over RPC and are unaffected.
+
 ## [0.7.6] — 2026-09-30
 
 The Herdr sidebar can show what each SumoCode agent is working on.

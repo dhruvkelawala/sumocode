@@ -390,7 +390,9 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
 		const env: NodeJS.ProcessEnv = { PI_CODING_AGENT_DIR: agentDir };
 		if (mode === "source") env.SUMOCODE_EXTENSION_BUNDLE = "0";
 		app = spawnPiPty({
-			args: ["--offline", "--no-extensions", "--no-session", "--approve", "-e", "."],
+			// Pi 1.0 opens interactive sessions fullscreen, which does not draw the
+			// classic footer this test waits for; regular mode keeps that layout.
+			args: ["--offline", "--no-extensions", "--no-session", "--approve", "--tui-mode", "regular", "-e", "."],
 			env,
 			cols: 100,
 			rows: 30,

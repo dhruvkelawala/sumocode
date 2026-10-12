@@ -342,6 +342,7 @@ function setup(options: {
 	readonly reconcileTreeNavigation?: (outcome?: RpcTreeNavigationOutcome) => Promise<void>;
 	readonly setTreeNavigationBusy?: (busy: boolean) => void;
 	readonly isTreeNavigationBusy?: () => boolean;
+	readonly autoDeliveryAvailable?: boolean;
 } = {}) {
 	const controls = new FakeControls();
 	controls.sessionFile = options.sessionFile;
@@ -389,6 +390,7 @@ function setup(options: {
 			},
 			dismissSticky,
 		},
+		autoDeliveryAvailable: options.autoDeliveryAvailable,
 		editorText,
 		createMemoryClient: () => memory,
 		onExitRequest: options.onExitRequest,
@@ -589,7 +591,23 @@ describe("RpcHostActions", () => {
 
 		await expect(actions.handleSubmittedText("/queue sideways")).resolves.toBe(true);
 		expect(stateChanges).toHaveLength(3);
-		expect(notifications.at(-1)).toEqual({ message: "queue mode takes steer or follow-up", level: "warning" });
+		expect(notifications.at(-1)).toEqual({ message: "queue mode takes steer, follow-up, or auto", level: "warning" });
+	});
+
+	it("selects auto through /queue auto only, and says when Jev is unreachable", async () => {
+		const available = setup({ autoDeliveryAvailable: true });
+		await available.actions.handleSubmittedText("/queue auto");
+		expect(available.stateChanges.at(-1)?.promptDeliveryMode).toBe("auto");
+		expect(available.notifications).toEqual([{ message: "Queue mode: auto", level: "info" }]);
+		// The toggle key leaves auto for steer; it never cycles into auto.
+		available.actions.toggleQueueDeliveryMode();
+		expect(available.stateChanges.at(-1)?.promptDeliveryMode).toBe("steer");
+
+		const keyless = setup();
+		await keyless.actions.handleSubmittedText("/queue follow-up");
+		await keyless.actions.handleSubmittedText("/queue auto");
+		expect(keyless.stateChanges.at(-1)?.promptDeliveryMode).toBe("followUp");
+		expect(keyless.notifications.at(-1)).toEqual({ message: "no TYPESAFE_API_KEY · still follow-up", level: "warning" });
 	});
 
 	it("routes the delivery-toggle keybinding through the same /queue path", () => {

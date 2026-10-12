@@ -778,7 +778,7 @@ describe("native queue delivery and restore", () => {
 		const stateStore = new RpcHostStateStore();
 		const transaction = createRpcQueueRestoreTransaction({
 			editor: { getText: () => draft, setText: (text) => { calls.push("restore"); draft = text; } },
-			scheduler: { restoreAll: (current) => ({ count: 1, text: `compact\n\n${current}` }) },
+			scheduler: { restoreAll: (current) => ({ count: 1, text: current ? `compact\n\n${current}` : "compact" }) },
 			stateStore,
 			controls: {
 				clearQueue: async () => { calls.push("clear"); return { steering: ["steer"], followUp: ["follow"] }; },
@@ -849,6 +849,47 @@ describe("native queue delivery and restore", () => {
 		await expect(second).rejects.toThrow("clear failed");
 		expect(controls.clearQueue).toHaveBeenCalledOnce();
 		expect(controls.abort).not.toHaveBeenCalled();
+	});
+
+	it("takes an auto message whose delivery Jev decides during the clear, instead of sending it", async () => {
+		let release!: (delivery: "steer" | "followUp") => void;
+		const sendPrompt = vi.fn(async () => undefined);
+		const scheduler = createRpcPromptScheduler({
+			getBusy: () => true,
+			decideDelivery: () => new Promise((resolve) => { release = resolve; }),
+			sendPrompt,
+		});
+		await scheduler.submit("after that, open a PR", { delivery: "auto" });
+		let resolveClear!: (queue: { steering: string[]; followUp: string[] }) => void;
+		let draft = "";
+		const transaction = createRpcQueueRestoreTransaction({
+			editor: { getText: () => draft, setText: (text) => { draft = text; } },
+			scheduler,
+			stateStore: new RpcHostStateStore(),
+			controls: { clearQueue: () => new Promise((resolve) => { resolveClear = resolve; }), abort: vi.fn(async () => undefined) },
+			notifications: { notify: vi.fn(), dismissSticky: vi.fn() },
+		});
+
+		const restoring = transaction();
+		release("followUp");
+		await Promise.resolve();
+		resolveClear({ steering: ["steer"], followUp: [] });
+		await restoring;
+		expect(sendPrompt).not.toHaveBeenCalled();
+		expect(draft).toBe("steer\n\nafter that, open a PR");
+	});
+
+	it("puts the local queue back in the editor when the clear fails", async () => {
+		let draft = "draft";
+		const transaction = createRpcQueueRestoreTransaction({
+			editor: { getText: () => draft, setText: (text) => { draft = text; } },
+			scheduler: { restoreAll: () => ({ count: 1, text: "held" }) },
+			stateStore: new RpcHostStateStore(),
+			controls: { clearQueue: async () => { throw new Error("clear failed"); }, abort: vi.fn(async () => undefined) },
+			notifications: { notify: vi.fn(), dismissSticky: vi.fn() },
+		});
+		await expect(transaction()).rejects.toThrow("clear failed");
+		expect(draft).toBe("held\n\ndraft");
 	});
 });
 

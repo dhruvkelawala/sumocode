@@ -23,6 +23,15 @@ landed between the original scaffold and this release.
   `subagent_*` tools, and the system prompt maps each SumoCode role to a
   `delegate_task` call with the role's model and instructions.
 
+### Changed
+- **Pi 1.1.0**: the peer range, the dev pin, and the native build's bundled
+  Pi move from 0.99.1 to 1.1.0. The launcher treats Pi's new `--no-mcp`
+  flag as a boolean, so it never takes the prompt as its value. Pi 1.x opens
+  plain interactive sessions (`pi` with the extension, `sumocode
+  --no-sumo-tui`) fullscreen, where SumoCode's classic footer does not draw;
+  pass `--tui-mode regular` or set `"tuiMode": "regular"` to keep it. The
+  `sumocode` shell and T3 Code run Pi over RPC and are unaffected.
+
 ## [0.7.6] — 2026-09-30
 
 The Herdr sidebar can show what each SumoCode agent is working on.

@@ -127,7 +127,7 @@ async function runTerminalRunnerRole(): Promise<boolean> {
 }
 
 // ── Pi parseArgs consumption-class tables (mirrors bin/sumocode.sh, pinned by
-// test/integration/spawn-pi-pty.test.ts against pi-coding-agent 0.99.1) ────
+// test/integration/spawn-pi-pty.test.ts against pi-coding-agent 1.1.0) ────
 
 const PI_UNCONDITIONAL_VALUE_FLAGS = new Set([
 	"--provider", "--model", "--api-key", "--system-prompt",
@@ -140,7 +140,7 @@ const PI_BOOLEAN_FLAGS = new Set([
 	"--no-tools", "-nt", "--no-builtin-tools", "-nbt", "--no-extensions", "-ne",
 	"--no-skills", "-ns", "--no-prompt-templates", "-np", "--no-themes",
 	"--no-context-files", "-nc", "--verbose", "--approve", "-a", "--no-approve", "-na",
-	"--offline",
+	"--offline", "--no-mcp",
 ]);
 
 function isUnconditionalValueFlag(arg: string): boolean {

@@ -46,6 +46,14 @@ describe("T3 role guidance", () => {
 		expect(guidance).toContain("`delegate_task` cannot fence a child's tools");
 	});
 
+	it("keeps a multi-line role prompt inside its bullet", () => {
+		const guidance = buildT3RoleGuidance([
+			{ id: "planner", label: "Planner", description: "", systemPrompt: "plan first.\nlist risks.\r\nstop before editing.\n" },
+		]);
+
+		expect(guidance).toContain("- planner (inherits your model): plan first.\n  list risks.\n  stop before editing.\n");
+	});
+
 	it("surfaces roles.json problems in the guidance itself", () => {
 		expect(buildT3RoleGuidance(BUILT_IN_ROLES)).not.toContain("roles.json has problems");
 		const guidance = buildT3RoleGuidance(BUILT_IN_ROLES, ["invalid roles.json: Unexpected token"]);

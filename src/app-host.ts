@@ -36,7 +36,8 @@ function roleLimits(role: SubagentRole): string[] {
  * this profile the prompt is the one place they reach the model and the user.
  */
 export function buildT3RoleGuidance(roles: readonly SubagentRole[], roleWarnings: readonly string[] = []): string {
-	const roleLines = roles.map((role) => `- ${role.id} (${roleLimits(role).join("; ")}): ${role.systemPrompt}`);
+	// roles.json prompts may span lines; indent the rest so each stays inside its bullet.
+	const roleLines = roles.map((role) => `- ${role.id} (${roleLimits(role).join("; ")}): ${role.systemPrompt.trim().replace(/\r?\n/g, "\n  ")}`);
 	const isolated = roles.filter((role) => role.defaultWorktree === true).map((role) => role.id);
 	return [
 		"## SumoCode roles in T3 Code",

@@ -6,7 +6,6 @@
 # -v/--version answers with the bundled Pi version, because those apps gate on
 # Pi's version, not SumoCode's.
 set -eu
-export SUMOCODE_APP_HOST=1
 
 # install.sh links this script onto PATH; follow the link back to the archive.
 script="$0"
@@ -33,4 +32,6 @@ for arg in "$@"; do
 		--no-extensions|-ne) exec "${bin_dir}/sumocode-pi" "$@" ;;
 	esac
 done
+# Set only here: the marker means the app-host profile is loading.
+export SUMOCODE_APP_HOST=1
 exec "${bin_dir}/sumocode" --no-sumo-tui "$@"

@@ -55,7 +55,8 @@ it.each([
 	record = registry.acquireControl(record.id, record.revision, record.writerLease!.generation, 0,
 		previous?.manager.controllerIdentity ?? { token: "old", pid: 77, processStartTime: "command" }, local ? 60_000 : 10);
 	if (!local) { oldAlive = false; vi.setSystemTime(2000); }
-	const runtime = install("successor", local ? undefined : registry, options);
+	const runtimeSession = local ? "successor" : "origin";
+	const runtime = install(runtimeSession, local ? undefined : registry, options);
 	try {
 		if (previous) {
 			const supervisor: NonNullable<RetainedSubagent["supervisor"]> = {
@@ -73,7 +74,7 @@ it.each([
 				authority: controlAuthority(record), snapshot: { id: initial.id, title: "worker", prompt: "task", cwd: taskDir,
 					baseRef: "HEAD", status: "running", createdAt: 1000, visible, usage: { turns: 0 }, transcript: [], liveText: "",
 					liveTools: [], finalText: "" } });
-			await previous.fire("session_shutdown", "new");
+			await previous.fire("session_shutdown", "new", join("/tmp", `${runtimeSession}.jsonl`));
 		}
 		await runtime.fire("session_start", local ? "new" : "restart");
 		expect(runtime.manager.get(initial.id)).toMatchObject({ recovery: refused ? "ambiguous" : "adopted", visible });

@@ -5,7 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { SUBAGENT_MAX_RUNNING, type SubagentEvent } from "./domain.js";
 import type { SpawnedChild } from "./backend-pi.js";
 import type { TerminalHost } from "../terminal-host/types.js";
-import { installSubagents, SubagentManager } from "./index.js";
+import { installSubagents } from "./index.js";
 import { BUILT_IN_TOOLS } from "./task-config.js";
 import { SubagentRegistry } from "./registry.js";
 
@@ -83,8 +83,8 @@ const fakeBuildCompletionManifest = async (options: { baseRef: string; outcome: 
 });
 
 /** Minimal command-handler context shape exercised by these tests. */
-type HandlerCtx = { cwd: string; model?: { provider: string; id: string }; isIdle?: () => boolean };
-type Handler = (event: { type: string; reason?: string }, ctx: HandlerCtx) => void;
+type HandlerCtx = { cwd: string; model?: { provider: string; id: string }; isIdle?: () => boolean; sessionManager: { getSessionId(): string; getSessionFile(): string | undefined } };
+type Handler = (event: { type: string; reason?: string; targetSessionFile?: string }, ctx: HandlerCtx) => void;
 
 /** Tool result shape the tests inspect. */
 interface ToolResult {
@@ -124,13 +124,14 @@ const createHarness = (hasUI = false, mode: "tui" | "rpc" = "tui", options: { re
 		isIdle: () => idle,
 		hasUI,
 		ui: { setWidget },
+		sessionManager: { getSessionId: () => "test-session", getSessionFile: () => "/tmp/test-session.jsonl" },
 	};
-	const fire = (event: string, reason?: string) => {
-		for (const handler of handlers.get(event) ?? []) handler({ type: event, reason }, ctx);
+	const fire = (event: string, reason?: string, targetSessionFile?: string) => {
+		for (const handler of handlers.get(event) ?? []) handler({ type: event, reason, targetSessionFile }, ctx);
 	};
-	const fireSessionStart = async (sessionId = "test-session") => {
-		const sessionCtx = { ...ctx, sessionManager: { getSessionId: () => sessionId } };
-		for (const handler of handlers.get("session_start") ?? []) await handler({ type: "session_start" }, sessionCtx);
+	const fireSessionStart = async (sessionId = "test-session", sessionFile = `/tmp/${sessionId}.jsonl`) => {
+		ctx.sessionManager = { getSessionId: () => sessionId, getSessionFile: () => sessionFile };
+		for (const handler of handlers.get("session_start") ?? []) await handler({ type: "session_start" }, ctx);
 	};
 	return {
 		manager,
@@ -226,14 +227,37 @@ describe("subagent result delivery", () => {
 		const factory = harness.setWidget.mock.calls.at(-1)?.[1] as (() => { render(width: number): string[] });
 		expect(factory().render(140).join("\n")).toContain("1 queued");
 
-		harness.fire("session_shutdown");
+		harness.fire("session_shutdown", "reload");
 		expect(harness.setWidget).toHaveBeenLastCalledWith("sumocode-subagents", undefined, { placement: "aboveEditor" });
 		await vi.waitFor(() => expect(harness.manager.list().slice(0, SUBAGENT_MAX_RUNNING + 1).every((snapshot) => snapshot.status === "error")).toBe(true));
 		expect(backend.piCalls).toBe(SUBAGENT_MAX_RUNNING);
 
 		harness.fire("session_start");
 		await expect(spawn(harness.manager, "next session")).resolves.toMatchObject({ id: "sa-next-session-12", status: "running" });
-		harness.fire("session_shutdown");
+		harness.fire("session_shutdown", "quit");
+	});
+
+	it("releases legacy unscoped replacements instead of adopting them", async () => {
+		const key = Symbol.for("@dhruvkelawala/sumocode/subagent-replacements");
+		// SAFETY: the test owns this namespaced symbol and restores it by exercising cleanup.
+		const state = globalThis as typeof globalThis & { [key]?: Set<unknown> };
+		const legacy = new Set<unknown>([{}]);
+		state[key] = legacy;
+
+		const harness = createHarness();
+		await harness.fireSessionStart();
+
+		expect(legacy.size).toBe(0);
+		expect(state[key]).toBeUndefined();
+	});
+
+	it("uses the shutdown context for targetless reload before session start", async () => {
+		const harness = createHarness();
+		const detach = vi.spyOn(harness.manager, "detachForReplacement");
+
+		harness.fire("session_shutdown", "reload");
+		expect(detach).not.toHaveBeenCalled();
+		await harness.fireSessionStart();
 	});
 
 	it("never calls setWidget without UI", async () => {
@@ -543,11 +567,11 @@ describe("subagent result delivery", () => {
 
 	it("keeps auto-delivery working across an in-process session switch", async () => {
 		const harness = createHarness();
-		harness.fire("session_start");
+		await harness.fireSessionStart("test-session", "/tmp/test-session.jsonl");
 		// Simulate repeated binding defensively; real Pi 0.80.6 recreates the
 		// factory on replacement and RPC mode may bind the new instance twice.
-		harness.fire("session_shutdown", "new");
-		await harness.fireSessionStart("next-session");
+		harness.fire("session_shutdown", "new", "/tmp/next-session.jsonl");
+		await harness.fireSessionStart("next-session", "/tmp/next-session.jsonl");
 		harness.setIdle(false);
 		await spawn(harness.manager, "post-switch");
 		backend.emitters.at(-1)?.({ kind: "message-end", role: "assistant", text: "after switch" });
@@ -565,7 +589,9 @@ describe("subagent result delivery", () => {
 		await spawn(harness.manager, "pre-switch");
 		// Child is still running when the session switches; disposeAll interrupts
 		// it and the fold lands AFTER shutdown (real SIGTERM timing).
+		const dispose = vi.spyOn(harness.manager, "disposeAll");
 		harness.fire("session_shutdown");
+		expect(dispose).toHaveBeenCalledOnce();
 		backend.emitters.at(-1)?.({ kind: "run-settled", outcome: { kind: "interrupted" } });
 		harness.fire("session_start");
 		harness.fire("agent_end");
@@ -602,26 +628,49 @@ describe("subagent result delivery", () => {
 		expect((harness.sendMessage.mock.calls[0] as unknown[])[0]).toMatchObject({ customType: "subagent-result" });
 	});
 
+	it("offers a pending replacement only to Pi's target session file", async () => {
+		const origin = createHarness();
+		const unrelated = createHarness();
+		const successor = createHarness();
+		await origin.fireSessionStart("origin", "/tmp/origin.jsonl");
+		const unrelatedAdopt = vi.spyOn(unrelated.manager, "adoptFrom");
+		const successorAdopt = vi.spyOn(successor.manager, "adoptFrom");
+
+		origin.fire("session_shutdown", "new", "/tmp/successor.jsonl");
+		await unrelated.fireSessionStart("unrelated", "/tmp/unrelated.jsonl");
+		expect(unrelatedAdopt).not.toHaveBeenCalled();
+
+		await successor.fireSessionStart("successor", "/tmp/successor.jsonl");
+		expect(successorAdopt).toHaveBeenCalledExactlyOnceWith(origin.manager, "successor");
+	});
+
+	it("limits a targetless reload fallback to the same session id", async () => {
+		const origin = createHarness();
+		const unrelated = createHarness();
+		const successor = createHarness();
+		await origin.fireSessionStart("origin", "/tmp/origin.jsonl");
+		const unrelatedAdopt = vi.spyOn(unrelated.manager, "adoptFrom");
+		const successorAdopt = vi.spyOn(successor.manager, "adoptFrom");
+
+		origin.fire("session_shutdown", "reload");
+		await unrelated.fireSessionStart("unrelated", "/tmp/origin.jsonl");
+		expect(unrelatedAdopt).not.toHaveBeenCalled();
+
+		await successor.fireSessionStart("origin", "/tmp/reloaded-origin.jsonl");
+		expect(successorAdopt).toHaveBeenCalledExactlyOnceWith(origin.manager, "origin");
+	});
+
 	it("drops a failed replacement instead of retrying it on every session start", async () => {
-		const harness = createHarness();
-		// SAFETY: the test manipulates the documented process-global replacement set, then removes its entry.
-		const globals = globalThis as { [key: symbol]: Set<SubagentManager> | undefined };
-		const key = Symbol.for("@dhruvkelawala/sumocode/subagent-replacements");
-		// SAFETY: an existing process-global set is reused only when it already holds replacement managers.
-		const replacements = globals[key] instanceof Set ? (globals[key] as Set<SubagentManager>) : new Set<SubagentManager>();
-		globals[key] = replacements;
-		const previous = createHarness().manager;
-		replacements.add(previous);
-		const adopt = vi.spyOn(harness.manager, "adoptFrom").mockRejectedValueOnce(new Error("retained subagent id conflicts with successor work"));
-		try {
-			await harness.fireSessionStart("replacement");
-			await harness.fireSessionStart("replacement");
-			expect(adopt).toHaveBeenCalledTimes(1);
-			expect(replacements.has(previous)).toBe(false);
-		} finally {
-			replacements.delete(previous);
-			adopt.mockRestore();
-		}
+		const origin = createHarness();
+		const successor = createHarness();
+		await origin.fireSessionStart("origin", "/tmp/origin.jsonl");
+		origin.fire("session_shutdown", "new", "/tmp/replacement.jsonl");
+		const adopt = vi.spyOn(successor.manager, "adoptFrom").mockRejectedValueOnce(new Error("retained subagent id conflicts with successor work"));
+
+		await successor.fireSessionStart("replacement");
+		await successor.fireSessionStart("replacement");
+
+		expect(adopt).toHaveBeenCalledTimes(1);
 	});
 
 	it("contains corrupt retained recovery during session start and still flushes delivery", async () => {

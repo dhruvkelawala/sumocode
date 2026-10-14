@@ -120,7 +120,7 @@ function fixture(cut?: "starting" | "pre-release", backend: "headless" | "visibl
 	}, { operations, spawn: visibleSpawn, buildManifest });
 	const managers: SubagentManager[] = [];
 	function install(session: string, token = session, diskRecovery = false) {
-		type Handler = (event: { type: string; reason: string }, ctx: ExtensionContext) => void | Promise<void>;
+		type Handler = (event: { type: string; reason: string; targetSessionFile?: string }, ctx: ExtensionContext) => void | Promise<void>;
 		const handlers = new Map<string, Handler>();
 		const delivery = vi.fn();
 		type Tool = { name: string; execute: (id: string, params: { id?: string; ids?: string[] }) => Promise<{ details: unknown }> };
@@ -139,10 +139,14 @@ function fixture(cut?: "starting" | "pre-release", backend: "headless" | "visibl
 			retainedRegistry: diskRecovery ? registry.forController(controller) : undefined,
 			managerDependencies: { controllerIdentity: controller, processOperations: operations },
 		});
-		const fire = async (name: string, reason = "startup") => {
-			// SAFETY: lifecycle handlers use only idle/UI flags and the current session ID.
-			const context = { isIdle: () => true, hasUI: false, sessionManager: { getSessionId: () => session } } as ExtensionContext;
-			await handlers.get(name)?.({ type: name, reason }, context);
+		const fire = async (name: string, reason = "startup", targetSession: string | undefined = reason === "reload" ? undefined : session === "origin" ? "successor" : "final") => {
+			// SAFETY: lifecycle handlers use only idle/UI flags and session identity.
+			const context = { isIdle: () => true, hasUI: false, sessionManager: {
+				getSessionId: () => session, getSessionFile: () => join(directory, `${session}.jsonl`),
+			} } as ExtensionContext;
+			await handlers.get(name)?.({ type: name, reason,
+				targetSessionFile: name === "session_shutdown" && targetSession !== undefined ? join(directory, `${targetSession}.jsonl`) : undefined,
+			}, context);
 		};
 		const runtime = { manager, delivery, fire, tools };
 		managers.push(manager);
@@ -198,6 +202,7 @@ async function blocked(f: Fixture, runtime: ReturnType<Fixture["install"]>): Pro
 async function replaceAndComplete(reason: string, beforeSettle = true, backend: "headless" | "visible" = "headless"): Promise<void> {
 	const f = fixture(undefined, backend);
 	const old = f.install("origin");
+	await old.fire("session_start");
 	const authority = await f.track(old);
 	const initial = f.owner.record;
 	if (!beforeSettle) await f.finish();
@@ -220,9 +225,9 @@ async function replaceAndComplete(reason: string, beforeSettle = true, backend: 
 	await old.fire("agent_end");
 	await next.fire("agent_end");
 	await next.fire("agent_end");
-	expect(old.delivery).not.toHaveBeenCalled();
-	expect(next.delivery).toHaveBeenCalledTimes(1);
-	await next.fire("session_shutdown", "new");
+	expect(old.delivery).toHaveBeenCalledTimes(beforeSettle ? 0 : 1);
+	expect(next.delivery).toHaveBeenCalledTimes(beforeSettle ? 1 : 0);
+	await next.fire("session_shutdown", "new", "final");
 	const final = f.install("final");
 	await final.fire("session_start", "new");
 	await final.fire("agent_end");
@@ -257,7 +262,7 @@ describe("production recovery matrix", () => {
 						vi.setSystemTime(Date.now() + elapsed);
 						f.owner.renew();
 					}
-					const next = f.install(replacement === "host-Pi reload" ? "origin" : "successor", "successor", true);
+					const next = f.install("origin", "successor", true);
 					await next.fire("session_start", "restart");
 					expect(f.registry.inspectControl(oldAuthority)).toBe(false);
 					expect(next.manager.get(f.record.id)?.recovery).toBe("adopted");
@@ -388,7 +393,7 @@ describe("durable failure boundaries", () => {
 			vi.mocked(f.operations.census!).mockReturnValue(nonce ? [{ pid: 42, processGroupId: 42, processStartTime: "anchor-birth", anchorNonce: nonce }] : []);
 			const [observed] = censusRetained(f.registry, f.operations);
 			expect(observed.launch).toBe(cut === "starting" ? "never-launched" : "launched-unknown");
-			await reconstructRetained(f.registry, { token: "next", pid: 99, processStartTime: "next-birth" }, "next", f.operations);
+			await reconstructRetained(f.registry, { token: "next", pid: 99, processStartTime: "next-birth" }, "origin", f.operations);
 			const classification = cut === "starting" ? "lost" : "ambiguous";
 			expect(readFileSync(join(f.directory, "registry", `${f.record.id}.recovery-${before.revision}-${classification}.json`), "utf8")).toContain(classification);
 			expect(f.registry.get(f.record.id)).toEqual(before);
@@ -486,7 +491,7 @@ describe("sender exact-once with explicit uncertainty", () => {
 			expect(next.delivery).toHaveBeenCalledTimes(1);
 			expect(next.delivery.mock.calls[0]?.[0]).toMatchObject({ customType: "subagent-delivery-uncertain", content: `delivery of ${f.record.id} uncertain; result manifest available at ${join(f.taskDir, "manifest.json")}; use inspect` });
 			await next.fire("session_shutdown", "reload");
-			const final = f.install("final");
+			const final = f.install("successor", "final");
 			await final.fire("session_start", "reload");
 			await final.fire("agent_end");
 			expect(final.delivery).not.toHaveBeenCalled();

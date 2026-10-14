@@ -56,7 +56,7 @@ export async function runSourceController(root: string, mode: string, pi: string
 		return;
 	}
 	if (mode === "delivery-successor" || mode === "delivery-final") {
-		const runtime = create(mode, registry);
+		const runtime = create("origin", registry);
 		try {
 			if (scenario === "delivery:notice-before-ack" && mode === "delivery-successor") runtime.afterSend(() => {
 				put("notice-cut-ready.json", {});
@@ -71,7 +71,7 @@ export async function runSourceController(root: string, mode: string, pi: string
 		return;
 	}
 	if (mode.startsWith("race-")) {
-		const runtime = create(mode, registry);
+		const runtime = create("origin", registry);
 		put(`${mode}-ready.json`, {});
 		await waitForFile(join(root, "race-release"));
 		await runtime.fire("session_start", "restart");
@@ -80,7 +80,7 @@ export async function runSourceController(root: string, mode: string, pi: string
 	}
 	if (mode === "recover-lost") {
 		const before = registry.get("sa-real")!;
-		const runtime = create("successor", registry);
+		const runtime = create("origin", registry);
 		try {
 			await runtime.fire("session_start", "restart");
 			const after = registry.get(before.id)!;
@@ -111,7 +111,7 @@ export async function runSourceController(root: string, mode: string, pi: string
 		const observations = censusRetained(registry);
 		assert.equal(observations[0]?.launch, "verified");
 		assert.equal(observations[0]?.censusKnown, true);
-		const runtime = create("successor", registry);
+		const runtime = create("origin", registry);
 		await runtime.fire("session_start", "restart");
 		const recovered = runtime.manager.get(before.id);
 		if (recovered?.recovery !== "adopted") {
@@ -209,7 +209,7 @@ export async function runSourceController(root: string, mode: string, pi: string
 	const snapshot: SubagentSnapshot = { id: initial.id, title: "worker", prompt: "synthetic recovery task", cwd: join(root, "cwd"), baseRef: "HEAD",
 		status: "running", createdAt: now, visible, usage: { turns: 0 }, transcript: [], liveText: "", liveTools: [], finalText: "" };
 	await old.manager.trackRetained({ registry: registry.forController(old.manager.controllerIdentity), supervisor: owner, snapshot, authority });
-	await old.fire("session_shutdown", "new");
+	await old.fire("session_shutdown", "new", join("/tmp", "successor.jsonl"));
 	const next = create("successor");
 	try {
 		await next.fire("session_start", "new");
@@ -237,7 +237,7 @@ export async function runSourceController(root: string, mode: string, pi: string
 
 export function install(session: string, registry?: SubagentRegistry,
 	options: { visible?: boolean; executor?: PiExecLike; operations?: ProcessTreeOperations } = {}) {
-	type Handler = (event: { type: string; reason: string }, context: ExtensionContext) => void | Promise<void>;
+	type Handler = (event: { type: string; reason: string; targetSessionFile?: string }, context: ExtensionContext) => void | Promise<void>;
 	const handlers = new Map<string, Handler>();
 	const deliveries: Parameters<ExtensionAPI["sendMessage"]>[0][] = [];
 	type Tool = { name: string; execute: (id: string, params: { id?: string; ids?: string[] }) => Promise<{ details: unknown }> };
@@ -252,10 +252,15 @@ export function install(session: string, registry?: SubagentRegistry,
 		terminalHost: options.visible ? herdrTerminalHost : undefined,
 		managerDependencies: { processOperations: options.operations },
 		spawnPiChild: refuseSpawn, spawnPaneChild: refuseSpawn });
-	return { manager, deliveries, tools, afterSend: (callback: () => void) => { afterSend = callback; }, fire: async (name: string, reason = "startup") => {
-		// SAFETY: these lifecycle handlers need only the session ID and idle/UI flags.
-		const context = { isIdle: () => true, hasUI: false, sessionManager: { getSessionId: () => session } } as ExtensionContext;
-		await handlers.get(name)?.({ type: name, reason }, context);
+	return { manager, deliveries, tools, afterSend: (callback: () => void) => { afterSend = callback; }, fire: async (
+		name: string, reason = "startup", targetSessionFile?: string,
+	) => {
+		// SAFETY: these lifecycle handlers need only the session identity and idle/UI flags.
+		const context = { isIdle: () => true, hasUI: false, sessionManager: {
+			getSessionId: () => session,
+			getSessionFile: () => join("/tmp", `${session}.jsonl`),
+		} } as ExtensionContext;
+		await handlers.get(name)?.({ type: name, reason, targetSessionFile }, context);
 	} };
 }
 

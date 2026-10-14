@@ -11,7 +11,9 @@ import type { install } from "./plan112-source-controller.js";
 export async function runLocalFault(root: string, scenario: string, registry: SubagentRegistry,
 	owner: RetainedHeadlessSupervisor, initial: SubagentRecord, create: typeof install): Promise<void> {
 	const old = create("origin");
-	const next = create("successor");
+	const reason = scenario.startsWith("handoff:") ? scenario.slice(8) : "new";
+	const nextSession = reason === "reload" ? "origin" : "successor";
+	const next = create(nextSession);
 	const current = owner.record;
 	const granted = registry.acquireControl(current.id, current.revision, current.writerLease!.generation, current.controlHead, old.manager.controllerIdentity, 60_000);
 	const authority = controlAuthority(granted);
@@ -44,8 +46,7 @@ export async function runLocalFault(root: string, scenario: string, registry: Su
 			assert.notEqual(result.details, undefined);
 		}
 		if (scenario === "corrupt") writeFileSync(join(root, "registry", `${initial.id}.json`), "{broken", { mode: 0o600 });
-		const reason = scenario.startsWith("handoff:") ? scenario.slice(8) : "new";
-		await old.fire("session_shutdown", reason);
+		await old.fire("session_shutdown", reason, reason === "reload" ? undefined : join("/tmp", `${nextSession}.jsonl`));
 		await next.fire("session_start", reason);
 		if (scenario === "corrupt") {
 			assert.notEqual(next.manager.get(initial.id)?.recovery, "adopted");

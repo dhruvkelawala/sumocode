@@ -1,6 +1,7 @@
 import { open } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, extname, resolve } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import type { ImageContent } from "@earendil-works/pi-ai";
 import { resizeImage } from "@earendil-works/pi-coding-agent";
 import type { EditorImageAttachment } from "../../cathedral/editor-draft-state.js";
@@ -11,6 +12,7 @@ export const MAX_RPC_IMAGE_TOTAL_BYTES = 5 * 1024 * 1024;
 const MAX_RPC_IMAGE_SOURCE_BYTES = 50 * 1024 * 1024;
 // Pi's resizer measures encoded base64 bytes, while our transport limits measure decoded image bytes.
 const MAX_RPC_IMAGE_BASE64_BYTES = Math.floor(MAX_RPC_IMAGE_BYTES / 3) * 4;
+const MAX_RPC_IMAGE_DIMENSION = 2000;
 
 interface LoadRpcImagesOptions {
 	readonly cwd?: string;
@@ -38,16 +40,14 @@ export async function loadRpcImages(
 		const expected = mimeForExtension(extname(path));
 		if (!detected || !expected) throw new RpcImageLoadError(attachment, "file does not contain a supported image");
 		if (detected !== expected) throw new RpcImageLoadError(attachment, `file content is ${detected}, not ${expected}`);
-		let data: string;
-		let mimeType = detected;
-		if (bytes.byteLength > MAX_RPC_IMAGE_BYTES) {
-			const resized = await resizeImage(bytes, detected, { maxBytes: MAX_RPC_IMAGE_BASE64_BYTES });
-			if (!resized) throw new RpcImageLoadError(attachment, `image could not be resized below ${MAX_RPC_IMAGE_BYTES} byte limit`);
-			data = resized.data;
-			mimeType = resized.mimeType;
-		} else {
-			data = bytes.toString("base64");
-		}
+		// Compressed screenshots can exceed the many-image pixel limit while staying under the byte limit.
+		const resized = await resizeImage(bytes, detected, {
+			maxWidth: MAX_RPC_IMAGE_DIMENSION,
+			maxHeight: MAX_RPC_IMAGE_DIMENSION,
+			maxBytes: MAX_RPC_IMAGE_BASE64_BYTES,
+		});
+		if (!resized) throw new RpcImageLoadError(attachment, `image could not be resized within ${MAX_RPC_IMAGE_DIMENSION}px / ${MAX_RPC_IMAGE_BYTES} byte limits`);
+		const { data, mimeType } = resized;
 		totalBytes += Buffer.byteLength(data, "base64");
 		if (totalBytes > MAX_RPC_IMAGE_TOTAL_BYTES) {
 			throw new RpcImageLoadError(attachment, `images exceed ${MAX_RPC_IMAGE_TOTAL_BYTES} byte total limit`);
@@ -59,10 +59,21 @@ export async function loadRpcImages(
 
 async function readBoundedImage(path: string, attachment: EditorImageAttachment, maxSourceBytes: number): Promise<Buffer> {
 	let file;
-	try {
-		file = await open(path, "r");
-	} catch {
-		throw new RpcImageLoadError(attachment, "file not found or unreadable");
+	const promisedFileDeadline = Date.now() + 500;
+	for (;;) {
+		try {
+			file = await open(path, "r");
+			break;
+		} catch (error) {
+			// macOS file drops can publish a promised screenshot path shortly
+			// before screencaptureui has materialized the file. The former text
+			// path gained this delay naturally while the model started; native
+			// image submission reads immediately and must wait here instead.
+			if (!(error instanceof Error && "code" in error && error.code === "ENOENT") || Date.now() >= promisedFileDeadline) {
+				throw new RpcImageLoadError(attachment, "file not found or unreadable");
+			}
+			await delay(25);
+		}
 	}
 	try {
 		const metadata = await file.stat();

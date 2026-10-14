@@ -453,17 +453,24 @@ async function defaultStoreCredential(
  * authorization; the masked input is the fallback when the CLI is missing or
  * the mint fails, and the only path when the user already has a token.
  */
-async function useLongLivedToken(ctx: ExtensionCommandContext, account: ClaudeAccount, deps: AccountsCommandDeps): Promise<void> {
+async function useLongLivedToken(pi: ExtensionAPI, ctx: ExtensionCommandContext, account: ClaudeAccount, deps: AccountsCommandDeps): Promise<void> {
 	const controller = new AbortController();
 	try {
 		ctx.ui.setStatus("sumocode.accounts", `minting a long-lived token for ${account.label}…`);
 		let acquired: string | undefined;
+		let authorizationUrl: string | undefined;
 		try {
 			const result = await (deps.acquireToken ?? ((options: AcquireTokenOptions) => acquireLongLivedToken(options)))({
 				signal: controller.signal,
 				onProgress: (line) => {
 					const url = parseAuthorizationUrl(line);
-					if (url) ctx.ui.setWidget("sumocode.accounts", [`authorize in the browser: ${url}`], { placement: "aboveEditor" });
+					if (!url || url === authorizationUrl) return;
+					authorizationUrl = url;
+					pi.sendMessage({
+						customType: "claude-authorization",
+						content: `authorize ${account.label} in the browser:\n\n[open Claude authorization](<${url}>)`,
+						display: true,
+					}, { triggerTurn: false });
 				},
 			});
 			if (result.status === "ok") acquired = result.token;
@@ -705,7 +712,7 @@ async function accountActions(pi: ExtensionAPI, ctx: ExtensionCommandContext, ac
 	];
 	const action = await ctx.ui.select(`${account.label.toUpperCase()} · ${account.providerId}`, actions);
 	if (action === "use this account") await switchAccount(pi, ctx, account, deps);
-	else if (action === SIGN_IN_LONG_LIVED || action === RENEW_LONG_LIVED) await useLongLivedToken(ctx, account, deps);
+	else if (action === SIGN_IN_LONG_LIVED || action === RENEW_LONG_LIVED) await useLongLivedToken(pi, ctx, account, deps);
 	else if (action === SIGN_IN_BROWSER) {
 		await (deps.login ?? defaultLogin)(account.providerId, ctx);
 	} else if (action === "rename account") await renameAccount(ctx, account, deps);

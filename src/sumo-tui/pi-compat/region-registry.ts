@@ -3,7 +3,7 @@ import type {
 	ReadonlyFooterDataProvider,
 	Theme,
 } from "@earendil-works/pi-coding-agent";
-import type { Component, EditorComponent, EditorTheme, OverlayOptions, TUI } from "@earendil-works/pi-tui";
+import { wrapTextWithAnsi, type Component, type EditorComponent, type EditorTheme, type OverlayOptions, type TUI } from "@earendil-works/pi-tui";
 import { SumoNode } from "../layout/node.js";
 import {
 	FLEX_DIRECTION_COLUMN,
@@ -85,8 +85,8 @@ export interface MountedRegion {
 class StaticTextComponent implements Component {
 	public constructor(private readonly lines: readonly string[]) {}
 	public invalidate(): void {}
-	public render(_width: number): string[] {
-		return [...this.lines];
+	public render(width: number): string[] {
+		return this.lines.flatMap((line) => wrapTextWithAnsi(line, Math.max(1, width)));
 	}
 }
 

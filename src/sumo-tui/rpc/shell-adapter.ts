@@ -39,6 +39,7 @@ import { ChatPager } from "../widgets/chat-pager.js";
 import type { KeyEvent } from "../input/key-router.js";
 import type { MouseEvent } from "../input/mouse.js";
 import { SelectionController } from "../input/selection.js";
+import { openWebLink } from "../runtime/open-web-link.js";
 import type { HostNotice, NotificationCenter } from "../widgets/notification.js";
 import { renderHostNotice } from "../widgets/notification.js";
 import type { RpcHostChromeState } from "./state.js";
@@ -66,6 +67,8 @@ export interface RpcShellAdapterOptions {
 	readonly modal?: Component & { getActiveKind?(): string | undefined };
 	readonly overlay?: Component & { getActiveKind?(): string | undefined };
 	readonly notifications?: RpcNoticeSink;
+	/** Browser-launch effect; replaceable without changing pointer/selection behavior. */
+	readonly openLink?: (url: string) => Promise<boolean>;
 	readonly extensionRegions?: {
 		readonly aboveEditor?: Component;
 		readonly belowEditor?: Component;
@@ -205,6 +208,11 @@ export class RpcShellAdapter {
 		const editorComponent = new RpcEditorShellComponent(this, options.inputPreview);
 		this.selection = new SelectionController({
 			readBuffer: () => this.renderer.getLastFrame(),
+			onLinkActivated: (url) => {
+				void (options.openLink ?? openWebLink)(url).catch(() => false).then((opened) => {
+					if (!opened) this.notifications?.notify?.("unable to open link in the browser", "error");
+				});
+			},
 			emitClipboard: (sequence) => {
 				options.terminal.writeClipboardSequence?.(sequence);
 			},
@@ -285,7 +293,8 @@ export class RpcShellAdapter {
 			// render at those coordinates instead of the text the user
 			// actually dragged over. Clearing unconditionally on any
 			// transcript application is the simplest rule that stays correct
-			// for both paths.
+			// for both paths. Pending link presses share that coordinate lifetime
+			// and are cancelled too.
 			this.selection.clear();
 		}
 		if (snapshot.activities) {

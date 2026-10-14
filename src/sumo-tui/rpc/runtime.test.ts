@@ -1,4 +1,4 @@
-import type { Component } from "@earendil-works/pi-tui";
+import { resetCapabilitiesCache, setCapabilities, type Component } from "@earendil-works/pi-tui";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -17,6 +17,8 @@ import type { RpcResponse } from "@earendil-works/pi-coding-agent";
 import type { RpcHostChromeState } from "./state.js";
 import { rpcVisualFixtureFromEnv } from "./visual-fixtures.js";
 import { ChatPager } from "../widgets/chat-pager.js";
+import { chatMessageViewModelFromPiMessage } from "../transcript/view-model.js";
+import { cellRowToAnsi } from "../render/ansi-writer.js";
 
 interface DiagEvent {
 	event: string;
@@ -325,6 +327,38 @@ describe("RPC host retained runtime frame", () => {
 		expect(plain).toContain("fast-mode: fast");
 		expect(plain).toContain("rpc above widget");
 		expect(plain).toContain("rpc sidebar widget");
+	});
+
+	it("renders Claude authorization in a SYSTEM frame with a short link targeting the complete URL", async () => {
+		const url = `https://claude.com/cai/auth/authorize?redirect_uri=${encodeURIComponent("http://localhost:12345/callback")}&state=${"x".repeat(180)}&code_challenge=${"y".repeat(64)}`;
+		const message = chatMessageViewModelFromPiMessage({
+			id: "claude-auth",
+			role: "custom",
+			customType: "claude-authorization",
+			display: true,
+			content: `authorize default account in the browser:\n\n[open Claude authorization](<${url}>)`,
+		});
+		expect(message?.role).toBe("system");
+		setCapabilities({ images: null, trueColor: true, hyperlinks: true });
+		try {
+			for (const width of [60, 160]) {
+				const frame = await renderRpcHostFrameForTest({
+					state: state({ messageCount: 1, hasMessages: true }),
+					transcript: { messages: [message!] },
+				}, width, 30);
+				const rows = Array.from({ length: 30 }, (_, row) => frame.toPlainRow(row));
+				expect(rows.join("\n")).toContain("SYSTEM");
+				const linkRow = rows.findIndex((row) => row.includes("open Claude authorization"));
+				expect(linkRow).toBeGreaterThanOrEqual(0);
+				const linkColumn = rows[linkRow].indexOf("open Claude authorization");
+				for (let offset = 0; offset < "open Claude authorization".length; offset += 1) {
+					expect(frame.getCell(linkRow, linkColumn + offset).hyperlink).toBe(url);
+				}
+				expect(cellRowToAnsi(frame, linkRow)).toContain(`\x1b]8;;${url}\x1b\\`);
+			}
+		} finally {
+			resetCapabilitiesCache();
+		}
 	});
 
 	it("renders RPC notifications through the overlay layer", async () => {

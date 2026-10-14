@@ -1,5 +1,5 @@
 import type { KeybindingsManager, ReadonlyFooterDataProvider, Theme } from "@earendil-works/pi-coding-agent";
-import type { Component, EditorComponent, EditorTheme, TUI } from "@earendil-works/pi-tui";
+import { visibleWidth, type Component, type EditorComponent, type EditorTheme, type TUI } from "@earendil-works/pi-tui";
 import { describe, expect, it, vi } from "vitest";
 import { DIRECTION_LTR, loadYoga } from "../layout/yoga.js";
 import { CellBuffer } from "../render/buffer.js";
@@ -105,6 +105,26 @@ describe("RegionRegistry", () => {
 
 		expect(frame.toPlainRow(0)).toBe("alpha       ");
 		expect(frame.toPlainRow(1)).toBe("beta        ");
+		registry.dispose();
+	});
+
+	it("keeps the entire accounts authorization URL visible across wrapping and resize", async () => {
+		const registry = await makeRegistry();
+		const url = `https://claude.com/cai/auth/authorize?code=true&redirect_uri=${encodeURIComponent("http://localhost:12345/callback")}&state=${"x".repeat(180)}&code_challenge=${"y".repeat(64)}`;
+		registry.mountWidget("sumocode.accounts", [`authorize in the browser: ${url}`], { placement: "aboveEditor" });
+		const widget = registry.createSlotPublication("aboveEditor").component;
+
+		for (const width of [60, 160]) {
+			const rows = widget.render(width);
+			expect(rows.every((row) => visibleWidth(row) <= width)).toBe(true);
+			registry.root.width = width;
+			registry.root.height = 20;
+			registry.root.yogaNode.calculateLayout(width, 20, DIRECTION_LTR);
+			const frame = new CellBuffer(20, width);
+			composite(registry.root, frame);
+			const visible = Array.from({ length: 20 }, (_, row) => frame.toPlainRow(row).trimEnd()).join("");
+			expect(visible).toContain(url);
+		}
 		registry.dispose();
 	});
 

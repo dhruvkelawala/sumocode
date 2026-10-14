@@ -93,7 +93,10 @@ function spawnSetupToken(spawnCommand: typeof spawn): SetupTokenProcess | undefi
 
 /** First http(s) URL in the mint output, so the caller can show where to authorize. */
 export function parseAuthorizationUrl(output: string): string | undefined {
-	return /https?:\/\/[^\s"'<>]+/.exec(output)?.[0];
+	// CLI hyperlinks end their URI with BEL/ST; never capture those bytes,
+	// the visible duplicate URL, or trailing color/link reset sequences.
+	// oxlint-disable-next-line no-control-regex -- terminal protocol bytes delimit, rather than belong to, the URL.
+	return /https?:\/\/[^\s"'<>\x00-\x1f\x7f-\x9f]+/.exec(output)?.[0];
 }
 
 export function staticClaudeCredential(token: string, mintedAt: number): StaticClaudeCredential {
